@@ -1589,13 +1589,13 @@
 
   function drawCelebration() {
     const t = state.celebrationTimer;
-    // warm party room
+    // bright, cheerful sky-blue party room
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, "#2a1c3a"); g.addColorStop(1, "#3a2340");
+    g.addColorStop(0, "#8fd3ff"); g.addColorStop(1, "#cfeeff");
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    // floor
-    ctx.fillStyle = "#5b3d24"; ctx.fillRect(0, 430, W, H - 430);
-    ctx.fillStyle = "#6b4a2c"; ctx.fillRect(0, 430, W, 6);
+    // light wooden floor (legs read clearly against it)
+    ctx.fillStyle = "#e7c996"; ctx.fillRect(0, 430, W, H - 430);
+    ctx.fillStyle = "#d9b57e"; ctx.fillRect(0, 430, W, 6);
 
     // ---- birthday banner (bunting + text) ----
     ctx.strokeStyle = "#caa"; ctx.lineWidth = 2;
@@ -1610,12 +1610,12 @@
       ctx.fillStyle = flagCols[i % flagCols.length];
       ctx.beginPath(); ctx.moveTo(x - 14, yy); ctx.lineTo(x + 14, yy); ctx.lineTo(x, yy + 24); ctx.closePath(); ctx.fill();
     }
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = "#7a1550";
     ctx.font = "bold 30px Segoe UI, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("HAPPY BIRTHDAY RISA-SAN!", W / 2, 130);
-    ctx.font = "16px Segoe UI, sans-serif";
-    ctx.fillStyle = "#ffd166";
+    ctx.font = "bold 16px Segoe UI, sans-serif";
+    ctx.fillStyle = "#a86500";
     ctx.fillText("🎉  Welcome back, agent  🎉", W / 2, 158);
     ctx.textAlign = "left";
 
@@ -1951,14 +1951,6 @@
   function drawPlayer() {
     if (player.invuln > 0 && Math.floor(state.time / 4) % 2 === 0) return; // blink
     const px = player.x, py = player.y;
-
-    // soft glow/outline so the spy is always visible (e.g. behind touch buttons)
-    ctx.save();
-    ctx.shadowColor = "rgba(255,255,255,0.9)";
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = "rgba(255,255,255,0.35)";
-    ctx.fillRect(px - 2, py - 3, player.w + 4, player.h + 5);
-    ctx.restore();
 
     // body (spy suit)
     ctx.fillStyle = "#20243b";

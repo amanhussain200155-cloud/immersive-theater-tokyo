@@ -122,35 +122,8 @@ b { color: #e8ecf5; }
 .pad-left  { align-items: flex-end; }
 .pad-right { align-items: flex-end; }
 
-/* On-screen analog joystick (bottom-left) */
-#joystick {
-  position: relative;
-  width: 116px;
-  height: 116px;
-  border-radius: 50%;
-  border: 2px solid rgba(255,255,255,0.35);
-  background: rgba(30, 34, 55, 0.4);
-  backdrop-filter: blur(3px);
-  pointer-events: auto;
-  touch-action: none;
-  flex: 0 0 auto;
-}
-#joystick-knob {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 52px;
-  height: 52px;
-  margin: -26px 0 0 -26px;
-  border-radius: 50%;
-  background: rgba(255, 92, 138, 0.75);
-  border: 2px solid rgba(255,255,255,0.5);
-  transition: transform .02s linear;
-}
-@media (min-width: 700px) and (pointer: coarse) {
-  #joystick { width: 132px; height: 132px; }
-  #joystick-knob { width: 60px; height: 60px; margin: -30px 0 0 -30px; }
-}
+/* Aim buttons (shoot/bomb/web) are drag-to-aim; let them capture drags. */
+.aimbtn { touch-action: none; }
 
 .tbtn {
   width: 52px;

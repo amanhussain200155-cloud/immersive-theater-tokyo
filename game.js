@@ -64,9 +64,9 @@
   const keys = {};
   const pressed = {}; // one-shot presses (consumed on read)
 
-  // Analog joystick vector (on-screen), range ~[-1,1] each axis; active while
-  // the player is dragging the stick. Drives movement AND aim direction.
-  const stick = { x: 0, y: 0, active: false };
+  // Aim vector set by dragging an action button (shoot/bomb/web). While a
+  // drag is active, this overrides keyboard aim. Range ~[-1,1] per axis.
+  const touchAim = { x: 0, y: 0, active: false };
 
   window.addEventListener("keydown", (e) => {
     // prevent page scroll on arrows/space while playing
@@ -127,7 +127,10 @@
   }
 
   if (touchControls) {
-    touchControls.querySelectorAll(".tbtn").forEach(bindTouchButton);
+    touchControls.querySelectorAll(".tbtn").forEach((btn) => {
+      if (btn.classList.contains("aimbtn")) bindAimButton(btn); // shoot/bomb/web drag-to-aim
+      else bindTouchButton(btn);                                 // left/right/jump
+    });
     function revealTouch() {
       touchControls.classList.remove("hidden");
     }
@@ -141,62 +144,65 @@
     if (isTouch) revealTouch();
   }
 
-  // ---- On-screen joystick (move + aim) ----
-  const joystickEl = document.getElementById("joystick");
-  const knobEl = document.getElementById("joystick-knob");
-  if (joystickEl && knobEl) {
-    let jsPointer = null;
-    const maxR = 40; // knob travel radius in px
-
-    function setStickFromEvent(clientX, clientY) {
-      const r = joystickEl.getBoundingClientRect();
-      const cx = r.left + r.width / 2;
-      const cy = r.top + r.height / 2;
-      let dx = clientX - cx;
-      let dy = clientY - cy;
-      const dist = Math.hypot(dx, dy) || 1;
-      const clamped = Math.min(dist, maxR);
-      const nx = (dx / dist) * clamped;
-      const ny = (dy / dist) * clamped;
-      knobEl.style.transform = "translate(" + nx + "px," + ny + "px)";
-      stick.x = nx / maxR;   // -1..1
-      stick.y = ny / maxR;   // -1..1 (down is +y, matching screen/aim)
-      stick.active = true;
+  // ---- Drag-to-aim action buttons (shoot / bomb / web) ----
+  // Press an action button and (optionally) drag to aim; releasing fires the
+  // action in the aimed direction. A quick tap fires straight ahead.
+  let aimHold = 0; // frames to keep touchAim active around a release
+  function aimFromDrag(btn, clientX, clientY) {
+    const r = btn.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const dx = clientX - cx, dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 12) {           // basically a tap — aim straight ahead
+      touchAim.x = player.facing; touchAim.y = 0;
+    } else {
+      touchAim.x = dx / dist; touchAim.y = dy / dist;
     }
-    function releaseStick() {
-      stick.x = 0; stick.y = 0; stick.active = false;
-      knobEl.style.transform = "translate(0,0)";
-      jsPointer = null;
-    }
-
-    // Pointer events cover both touch and mouse.
-    joystickEl.addEventListener("pointerdown", (e) => {
+    touchAim.active = true;
+  }
+  let shootPulse = 0; // frames to hold the shoot key after a tap/drag-release
+  function fireAction(action) {
+    // Hold the aim briefly so the shot/throw uses the aimed direction.
+    aimHold = 6;
+    if (action === "shoot") { shootPulse = 4; }         // frame-based shoot hold
+    else if (action === "bomb") { pressed["k"] = true; } // one-shot consumed by BOMB()
+    else if (action === "web")  { pressed["l"] = true; } // one-shot consumed by WEB()
+  }
+  function bindAimButton(btn) {
+    const action = btn.getAttribute("data-key");
+    let ptr = null;
+    const down = (e) => {
       e.preventDefault();
-      jsPointer = e.pointerId;
-      if (joystickEl.setPointerCapture) { try { joystickEl.setPointerCapture(e.pointerId); } catch (_) {} }
-      setStickFromEvent(e.clientX, e.clientY);
-    });
-    joystickEl.addEventListener("pointermove", (e) => {
-      if (jsPointer === null || e.pointerId !== jsPointer) return;
+      ptr = (e.pointerId != null) ? e.pointerId : "touch";
+      if (btn.setPointerCapture && e.pointerId != null) { try { btn.setPointerCapture(e.pointerId); } catch (_) {} }
+      btn.classList.add("pressed");
+      const p = e.touches ? e.touches[0] : e;
+      aimFromDrag(btn, p.clientX, p.clientY);
+    };
+    const move = (e) => {
+      if (ptr === null) return;
       e.preventDefault();
-      setStickFromEvent(e.clientX, e.clientY);
-    });
-    const endJs = (e) => { if (jsPointer !== null && e.pointerId === jsPointer) releaseStick(); };
-    joystickEl.addEventListener("pointerup", endJs);
-    joystickEl.addEventListener("pointercancel", endJs);
-    joystickEl.addEventListener("lostpointercapture", releaseStick);
-
-    // Touch fallback (older browsers without pointer events).
-    joystickEl.addEventListener("touchstart", (e) => {
-      e.preventDefault(); const t = e.changedTouches[0]; jsPointer = "touch";
-      setStickFromEvent(t.clientX, t.clientY);
-    }, { passive: false });
-    joystickEl.addEventListener("touchmove", (e) => {
-      e.preventDefault(); const t = e.changedTouches[0];
-      setStickFromEvent(t.clientX, t.clientY);
-    }, { passive: false });
-    joystickEl.addEventListener("touchend", (e) => { e.preventDefault(); releaseStick(); }, { passive: false });
-    joystickEl.addEventListener("touchcancel", releaseStick);
+      const p = e.touches ? e.touches[0] : e;
+      aimFromDrag(btn, p.clientX, p.clientY);
+    };
+    const up = (e) => {
+      if (ptr === null) return;
+      e.preventDefault();
+      btn.classList.remove("pressed");
+      fireAction(action);           // fire in the current aim direction
+      ptr = null;
+      // clear aim shortly after so it doesn't linger
+      setTimeout(() => { if (aimHold <= 0) { touchAim.active = false; touchAim.x = 0; touchAim.y = 0; } }, 90);
+    };
+    btn.addEventListener("pointerdown", down);
+    btn.addEventListener("pointermove", move);
+    btn.addEventListener("pointerup", up);
+    btn.addEventListener("pointercancel", up);
+    // touch fallback
+    btn.addEventListener("touchstart", down, { passive: false });
+    btn.addEventListener("touchmove", move, { passive: false });
+    btn.addEventListener("touchend", up, { passive: false });
   }
 
   // ---- Mute toggle (button + 'M' key) ----
@@ -411,7 +417,7 @@
   const UP    = () => keys["w"] || keys["ArrowUp"];
   const DOWN  = () => keys["s"] || keys["ArrowDown"];
   const JUMP  = () => consume("space");
-  const SHOOT = () => keys["j"] || keys["f"];
+  const SHOOT = () => keys["j"] || keys["f"] || shootPulse > 0;
   const BOMB  = () => consume("k") || consume("b");
   const WEB   = () => consume("l") || consume("g");
 
@@ -750,14 +756,14 @@
   // ---------------------------------------------------------------------
   function updateAim() {
     let ax = 0, ay = 0;
-    if (stick.active && (Math.abs(stick.x) > 0.3 || Math.abs(stick.y) > 0.3)) {
-      ax = stick.x; ay = stick.y;
+    if (touchAim.active && (Math.abs(touchAim.x) > 0.2 || Math.abs(touchAim.y) > 0.2)) {
+      // aiming via a drag on an action button (shoot/bomb/web)
+      ax = touchAim.x; ay = touchAim.y;
     } else {
       // keyboard: horizontal from facing, vertical from up/down keys
       ax = player.facing;
       if (keys["w"] || keys["ArrowUp"]) ay = -1;
       else if (keys["s"] || keys["ArrowDown"]) ay = 1;
-      // allow left/right keys to steer aim horizontally too
       if (keys["a"] || keys["ArrowLeft"]) ax = -1;
       else if (keys["d"] || keys["ArrowRight"]) ax = 1;
     }
@@ -768,17 +774,12 @@
   }
 
   function updatePlayer() {
-    // Horizontal movement — keyboard OR joystick x.
-    const stickMoveX = Math.abs(stick.x) > 0.25 ? stick.x : 0;
+    // Horizontal movement (arrow buttons / keyboard).
     if (LEFT())       { player.vx = -MOVE_SPEED; player.facing = -1; }
     else if (RIGHT()) { player.vx = MOVE_SPEED;  player.facing = 1; }
-    else if (stickMoveX !== 0) {
-      player.vx = MOVE_SPEED * Math.max(-1, Math.min(1, stickMoveX));
-      player.facing = stickMoveX > 0 ? 1 : -1;
-    } else { player.vx *= FRICTION; if (Math.abs(player.vx) < 0.1) player.vx = 0; }
+    else { player.vx *= FRICTION; if (Math.abs(player.vx) < 0.1) player.vx = 0; }
 
-    // Aim direction: from the joystick if it's pushed, else keyboard arrows/WASD
-    // vertical, else straight in the facing direction.
+    // Aim direction: from a drag on an action button, else keyboard, else facing.
     updateAim();
 
     // Jump — with coyote time (grace after leaving a ledge) and jump
@@ -920,12 +921,15 @@
     web.life--;
     const t = web.target;
     if (t && t.alive) {
-      // Reel the target toward the spy.
+      // Reel the target toward a point a little in FRONT of the spy (not on
+      // top), so it doesn't collide with the player — leaving room to shoot.
+      const STOP_GAP = 82; // px in front of the spy the guard is reeled to
       const px = player.x + player.w / 2;
+      const targetX = px + player.facing * STOP_GAP; // where we pull them to
       const tx = t.x + t.w / 2;
-      const pull = (px - tx) * 0.28;      // ease the enemy toward the spy
+      const pull = (targetX - tx) * 0.28;  // ease the enemy toward that point
       t.x += pull;
-      t.stun = WEB_STUN;                  // keep them stunned while/after reeling
+      t.stun = WEB_STUN;                   // keep them stunned while/after reeling
       t.showHp = 120;
       if (!web.damaged) {
         web.damaged = true;
@@ -1007,13 +1011,32 @@
     if (e.vy > MAX_FALL) e.vy = MAX_FALL;
     e.y += e.vy;
     e.onGround = false;
-    for (const p of level.platforms) {
-      if (rectsOverlap(e, p)) {
-        if (e.vy > 0 && (e.y + e.h) - p.y < 26) { // landing on top
-          e.y = p.y - e.h; e.vy = 0; e.onGround = true;
+
+    // Resolve against each platform along the axis of least penetration so a
+    // guard is pushed out of a block's side/top instead of sinking in.
+    for (let iter = 0; iter < 3; iter++) {
+      let resolved = false;
+      for (const p of level.platforms) {
+        if (!rectsOverlap(e, p)) continue;
+        const overlapLeft   = (e.x + e.w) - p.x;   // push left
+        const overlapRight  = (p.x + p.w) - e.x;   // push right
+        const overlapTop    = (e.y + e.h) - p.y;   // push up (land on top)
+        const overlapBottom = (p.y + p.h) - e.y;   // push down
+        const minX = Math.min(overlapLeft, overlapRight);
+        const minY = Math.min(overlapTop, overlapBottom);
+        if (minX < minY) {
+          if (overlapLeft < overlapRight) { e.x = p.x - e.w; e.dir = -1; }
+          else { e.x = p.x + p.w; e.dir = 1; }
+        } else {
+          if (overlapTop < overlapBottom) { e.y = p.y - e.h; e.onGround = true; }
+          else { e.y = p.y + p.h; }
+          e.vy = 0;
         }
+        resolved = true;
       }
+      if (!resolved) break;
     }
+
     // keep within the world
     if (e.x < 0) e.x = 0;
     if (e.x + e.w > level.worldW) e.x = level.worldW - e.w;
@@ -1956,6 +1979,8 @@
     state.time++;
     if (state.mode === "play") {
       if (state.gatePrompt > 0) state.gatePrompt--;
+      if (aimHold > 0) { aimHold--; if (aimHold === 0) { touchAim.active = false; touchAim.x = 0; touchAim.y = 0; } }
+      if (shootPulse > 0) shootPulse--;
       updatePlayer();
       updateEnemies();
       updateBoss();

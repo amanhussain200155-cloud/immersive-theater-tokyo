@@ -1564,23 +1564,24 @@
   function updateCelebration() {
     state.celebrationTimer++;
     const t = state.celebrationTimer;
-    // spy walks to the CENTRE, stopping just left of the cake
+    // spy walks slowly to the CENTRE, stopping just left of the cake
     const target = W / 2 - 60;
-    if (party.spyX < target) party.spyX += 2.4;
-    // once she reaches the cake and a beat passes, she blows out the candles
-    if (party.candlesLit && party.spyX >= target && t > 150) {
+    if (party.spyX < target) party.spyX += 1.2;   // slower stroll in
+    // She reaches the cake, then lingers a good while (so 'Make a wish' stays
+    // on screen) before blowing out the candles.
+    if (party.candlesLit && party.spyX >= target && t > 480) {
       party.candlesLit = false;
       party.blewAt = t;
       Sfx.win(); // a cheerful chime as the candles go out
     }
-    // confetti falls and wraps around
+    // confetti falls (gently) and wraps around
     for (const c of party.confetti) {
-      c.y += c.vy; c.x += c.vx; c.rot += 0.05;
+      c.y += c.vy * 0.7; c.x += c.vx * 0.7; c.rot += 0.04;
       if (c.y > H) { c.y = -10; c.x = Math.random() * W; }
     }
     // The party is the finale — it lingers. A tap after the candles are blown
     // ends on a final screen.
-    if (!party.candlesLit && (t - party.blewAt) > 120 && (consume("space") || consume("celebrationSkip"))) {
+    if (!party.candlesLit && (t - party.blewAt) > 150 && (consume("space") || consume("celebrationSkip"))) {
       state.mode = "ended";
       showMessage("✅ Mission Complete", "Thanks for playing, agent. 🎭  The End.", null, null);
     }
@@ -1661,7 +1662,7 @@
 
     // ---- guests (friends & family) bouncing / waving ----
     for (const gst of party.guests) {
-      const by = gst.y + Math.abs(Math.sin(t * 0.12 + gst.bob)) * -8; // little bounce
+      const by = gst.y + Math.abs(Math.sin(t * 0.08 + gst.bob)) * -8; // gentle bounce
       drawPartyPerson(gst.x, by, gst.c, gst.hair, gst.tall, t);
     }
 
@@ -1950,6 +1951,14 @@
   function drawPlayer() {
     if (player.invuln > 0 && Math.floor(state.time / 4) % 2 === 0) return; // blink
     const px = player.x, py = player.y;
+
+    // soft glow/outline so the spy is always visible (e.g. behind touch buttons)
+    ctx.save();
+    ctx.shadowColor = "rgba(255,255,255,0.9)";
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.fillRect(px - 2, py - 3, player.w + 4, player.h + 5);
+    ctx.restore();
 
     // body (spy suit)
     ctx.fillStyle = "#20243b";

@@ -132,28 +132,27 @@ b { color: #e8ecf5; }
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  background: rgba(30, 34, 55, 0.5);
-  color: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  background: rgba(30, 34, 55, 0.22);
+  color: rgba(255, 255, 255, 0.85);
   font-size: 20px;
   font-weight: 700;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  backdrop-filter: blur(3px);
   touch-action: none;
   transition: transform .05s ease, background .1s ease;
 }
 .tbtn:active,
 .tbtn.pressed {
-  background: rgba(255, 92, 138, 0.8);
+  background: rgba(255, 92, 138, 0.55);
   transform: scale(0.9);
 }
 .tbtn-jump  { width: 60px; height: 60px; font-size: 26px; }
-.tbtn-shoot { background: rgba(120, 30, 40, 0.55); }
-.tbtn-bomb  { background: rgba(60, 50, 20, 0.55); }
-.tbtn-web   { background: rgba(30, 60, 80, 0.55); }
+.tbtn-shoot { background: rgba(120, 30, 40, 0.28); }
+.tbtn-bomb  { background: rgba(60, 50, 20, 0.28); }
+.tbtn-web   { background: rgba(30, 60, 80, 0.28); }
 
 /* Slightly larger touch targets on bigger screens */
 @media (min-width: 700px) and (pointer: coarse) {

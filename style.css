@@ -151,6 +151,7 @@ b { color: #e8ecf5; }
 .tbtn-shoot { background: rgba(120, 30, 40, 0.55); }
 .tbtn-bomb  { background: rgba(60, 50, 20, 0.55); }
 .tbtn-web   { background: rgba(30, 60, 80, 0.55); }
+.tbtn-shield{ background: rgba(30, 70, 100, 0.6); }
 
 /* Slightly larger touch targets on bigger screens */
 @media (min-width: 700px) and (pointer: coarse) {

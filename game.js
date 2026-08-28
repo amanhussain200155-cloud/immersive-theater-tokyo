@@ -88,6 +88,7 @@
     switch (action) {
       case "left":  keys["a"] = down; break;
       case "right": keys["d"] = down; break;
+      case "shield": keys["e"] = down; break; // hold to raise the shield
       case "shoot": keys["j"] = down; break;
       case "web":
         keys["l"] = down;
@@ -424,6 +425,7 @@
   const SHOOT = () => keys["j"] || keys["f"];
   const BOMB  = () => consume("k") || consume("b");
   const WEB   = () => consume("l") || consume("g");
+  const SHIELD = () => keys["Shift"] || keys["e"];
 
   // ---------------------------------------------------------------------
   // Geometry helpers
@@ -457,6 +459,9 @@
     bombCooldown: 0,
     webCooldown: 0,
     invuln: 0,
+    shieldActive: false,
+    shieldEnergy: 100,     // 0..100; drains while up, recharges while down
+    shieldLock: false,     // locked out after full depletion until recharged
     coyote: 0,       // frames since last grounded (for coyote-time jumps)
     jumpBuffer: 0,   // frames since jump was pressed (for buffered jumps)
     reset(spawn) {
@@ -465,6 +470,7 @@
       this.onGround = false;
       this.hp = this.maxHp; this.invuln = 0; this.shootCooldown = 0;
       this.bombCooldown = 0; this.webCooldown = 0;
+      this.shieldActive = false; this.shieldEnergy = 100; this.shieldLock = false;
       this.coyote = 0; this.jumpBuffer = 0;
       this.facing = 1;
     }
@@ -824,9 +830,25 @@
     // Fell off the world
     if (player.y > H + 200) damagePlayer(35, true);
 
+    // Shield — hold to raise a bubble while energy remains. Drains while up,
+    // recharges while down. When it empties it locks out until recharged to
+    // 30%, so it can't flicker at empty. You can't shoot while shielding.
+    const wantShield = SHIELD();
+    if (wantShield && player.shieldEnergy > 0 && !player.shieldLock) {
+      player.shieldActive = true;
+      player.shieldEnergy = Math.max(0, player.shieldEnergy - 0.9);
+      if (player.shieldEnergy === 0) player.shieldLock = true;   // depleted
+    } else {
+      player.shieldActive = false;
+      player.shieldEnergy = Math.min(100, player.shieldEnergy + 0.45);
+      // Clear the lockout once recharged past 30% AND the button is released,
+      // so it can't auto re-raise while you keep holding after depletion.
+      if (player.shieldLock && player.shieldEnergy >= 30 && !wantShield) player.shieldLock = false;
+    }
+
     // Shooting — fires along the aim direction (joystick / keyboard).
     if (player.shootCooldown > 0) player.shootCooldown--;
-    if (SHOOT() && player.shootCooldown === 0) {
+    if (SHOOT() && !player.shieldActive && player.shootCooldown === 0) {
       const speed = 9.5;
       const cx = player.x + player.w / 2;
       const cy = player.y + 14;
@@ -995,6 +1017,9 @@
 
   function damagePlayer(amount, respawnPos) {
     if (player.invuln > 0) return;
+    // Shield blocks all incoming attacks (bullets, dash, contact) — but a
+    // fall off the world still respawns the player.
+    if (player.shieldActive && !respawnPos) { Sfx.bossHit(); return; }
     player.hp -= amount;
     player.invuln = 60;
     Sfx.hurt();
@@ -1715,6 +1740,21 @@
     ctx.lineTo(gx + ax * 90, gy + ay * 90);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    // Shield bubble
+    if (player.shieldActive) {
+      const bcx = px + player.w / 2, bcy = py + player.h / 2;
+      const r = 30 + Math.sin(state.time * 0.3) * 2;
+      const g = ctx.createRadialGradient(bcx, bcy, 6, bcx, bcy, r);
+      g.addColorStop(0, "rgba(108,199,255,0.05)");
+      g.addColorStop(0.7, "rgba(108,199,255,0.18)");
+      g.addColorStop(1, "rgba(108,199,255,0.35)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(bcx, bcy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(150,220,255,0.8)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(bcx, bcy, r, 0, Math.PI * 2); ctx.stroke();
+    }
   }
 
   function drawEnemies() {
@@ -2027,6 +2067,18 @@
     ctx.font = "bold 13px sans-serif";
     ctx.fillText("HP", 24, 33);
 
+    // shield energy meter (under HP)
+    ctx.fillStyle = "#000a";
+    ctx.fillRect(16, 42, 204, 16);
+    ctx.fillStyle = "#28304a";
+    ctx.fillRect(18, 44, 200, 12);
+    const se = player.shieldEnergy / 100;
+    ctx.fillStyle = player.shieldActive ? "#6cc7ff" : (se >= 1 ? "#4a9fd8" : "#3a6a90");
+    ctx.fillRect(18, 44, 200 * se, 12);
+    ctx.fillStyle = "#cfe6ff";
+    ctx.font = "bold 10px sans-serif";
+    ctx.fillText("🛡 SHIELD", 22, 54);
+
     // level name
     ctx.fillStyle = "#c3c9dc";
     ctx.font = "14px sans-serif";
@@ -2036,7 +2088,7 @@
 
     // clue counter (with mini collected image pieces)
     if (totalClues() > 0) {
-      const cy = 58;
+      const cy = 78;
       const n = totalClues();
       ctx.fillStyle = "#000a";
       ctx.fillRect(16, cy - 16, 96 + n * 20, 30);

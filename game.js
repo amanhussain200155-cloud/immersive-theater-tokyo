@@ -31,6 +31,16 @@
   window.addEventListener("orientationchange", () => setTimeout(fitCanvas, 200));
   fitCanvas();
 
+  // Tap/click during the celebration cutscene skips ahead to the message.
+  function celebrationTapSkip(e) {
+    if (state.mode === "celebration" && state.celebrationTimer > 40) {
+      if (e) e.preventDefault();
+      pressed["celebrationSkip"] = true;
+    }
+  }
+  canvas.addEventListener("click", celebrationTapSkip);
+  canvas.addEventListener("touchstart", celebrationTapSkip, { passive: false });
+
   // Best-effort fullscreen + landscape lock (only where the browser allows).
   function enterFullscreenLandscape() {
     const el = document.documentElement;
@@ -329,8 +339,9 @@
       },
       shoot()     { tone(880, 0.09, "square", 0.16, 220); },
       jump()      { tone(360, 0.16, "square", 0.18, 720); },
-      hit()       { /* smacking hit sound removed by request */ },
-      enemyDown() { /* guard/boss death sound removed by request */ },
+      hit()       { tone(760, 0.07, "sine", 0.10, 620); },   // soft, pleasant blip
+      enemyDown() { tone(520, 0.14, "sine", 0.13, 300); setTimeout(() => tone(330, 0.16, "sine", 0.11), 70); }, // gentle two-note fall
+      bombBurst() { tone(180, 0.22, "sine", 0.16, 70); tone(300, 0.12, "triangle", 0.08, 120); }, // soft low whump
       hurt()      { /* take-damage sound removed by request */ },
       bossHit()   { /* boss-hit / shield-block thud removed by request */ },
       win()       { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.28, "sine", 0.25), i * 140)); },
@@ -437,9 +448,10 @@
   // Global game state
   // ---------------------------------------------------------------------
   const state = {
-    mode: "menu",       // menu | play | riddle | win | dead
+    mode: "menu",       // menu | play | riddle | celebration | win | dead | ended
     levelIndex: 0,
     time: 0,
+    celebrationTimer: 0, // frames the celebration cutscene has been running
     gatePrompt: 0,      // frames to show the "collect all clues" gate message
   };
 
@@ -1007,7 +1019,7 @@
 
   function detonate(x, y) {
     explosions.push({ x, y, r: 6, max: EXPLOSION_RADIUS, life: 22 });
-    Sfx.enemyDown();
+    Sfx.bombBurst();
     // Damage all enemies within the blast radius.
     for (const e of enemies) {
       if (!e.alive) continue;
@@ -1487,12 +1499,163 @@
 
   function onBossDefeated() {
     Sfx.enemyDown();
-    // brief delay so the defeat reads on screen
-    setTimeout(onGameWin, 600);
+    // brief pause on the defeat, then roll the birthday celebration cutscene
+    setTimeout(startCelebration, 700);
   }
 
-  // ===== BIRTHDAY MESSAGE =====
-  const BIRTHDAY_NAME = "Risa-san";
+  // ----- Birthday celebration cutscene -----
+  const CELEBRATION_LENGTH = 460; // ~7.5s before the message appears
+  const party = { guests: [], confetti: [], spyX: -60 };
+  function startCelebration() {
+    state.mode = "celebration";
+    state.celebrationTimer = 0;
+    Sfx.stopMusic();
+    Sfx.happyBirthday();   // play the birthday tune over the scene
+    // set up guests (friends & family — male & female cues via colors/hair)
+    party.spyX = -60;
+    party.guests = [
+      { x: 300, y: 300, c: "#6cc7ff", hair: "#3a2a18", tall: true,  bob: 0.0 },  // male
+      { x: 380, y: 300, c: "#ff9ec7", hair: "#5b3a1e", tall: false, bob: 1.0 },  // female
+      { x: 620, y: 300, c: "#8b5cff", hair: "#222",    tall: true,  bob: 2.0 },  // male
+      { x: 700, y: 300, c: "#ffd166", hair: "#5b3a1e", tall: false, bob: 0.5 },  // female
+      { x: 560, y: 300, c: "#31d17e", hair: "#3a2a18", tall: false, bob: 1.6 },  // female
+    ];
+    party.confetti = [];
+    for (let i = 0; i < 70; i++) {
+      party.confetti.push({
+        x: Math.random() * W, y: Math.random() * -H,
+        vy: 1 + Math.random() * 2, vx: (Math.random() - 0.5) * 1.2,
+        c: ["#ff5c8a", "#6cc7ff", "#ffd166", "#31d17e", "#8b5cff"][i % 5],
+        sz: 3 + Math.random() * 4, rot: Math.random() * 6,
+      });
+    }
+  }
+
+  function updateCelebration() {
+    state.celebrationTimer++;
+    // spy walks in from the left to join the group
+    if (party.spyX < 200) party.spyX += 2.2;
+    // confetti falls and wraps around
+    for (const c of party.confetti) {
+      c.y += c.vy; c.x += c.vx; c.rot += 0.05;
+      if (c.y > H) { c.y = -10; c.x = Math.random() * W; }
+    }
+    // after the scene plays (or on tap/click/space) show the message
+    if (state.celebrationTimer > CELEBRATION_LENGTH || consume("space") || consume("celebrationSkip")) {
+      onGameWin();
+    }
+  }
+
+  function drawCelebration() {
+    const t = state.celebrationTimer;
+    // warm party room
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#2a1c3a"); g.addColorStop(1, "#3a2340");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // floor
+    ctx.fillStyle = "#5b3d24"; ctx.fillRect(0, 430, W, H - 430);
+    ctx.fillStyle = "#6b4a2c"; ctx.fillRect(0, 430, W, 6);
+
+    // ---- birthday banner (bunting + text) ----
+    ctx.strokeStyle = "#caa"; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 40; x <= W - 40; x += 10) {
+      ctx.lineTo(x, 60 + Math.sin(x * 0.03) * 10);
+    }
+    ctx.stroke();
+    const flagCols = ["#ff5c8a", "#6cc7ff", "#ffd166", "#31d17e", "#8b5cff"];
+    for (let i = 0, x = 60; x < W - 60; x += 46, i++) {
+      const yy = 60 + Math.sin(x * 0.03) * 10;
+      ctx.fillStyle = flagCols[i % flagCols.length];
+      ctx.beginPath(); ctx.moveTo(x - 14, yy); ctx.lineTo(x + 14, yy); ctx.lineTo(x, yy + 24); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 30px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("HAPPY BIRTHDAY RISA-SAN!", W / 2, 130);
+    ctx.font = "16px Segoe UI, sans-serif";
+    ctx.fillStyle = "#ffd166";
+    ctx.fillText("🎉  Welcome back, agent  🎉", W / 2, 158);
+    ctx.textAlign = "left";
+
+    // ---- balloons (bobbing) ----
+    const balloons = [[120, "#ff5c8a"], [220, "#6cc7ff"], [W - 120, "#ffd166"], [W - 220, "#31d17e"], [W / 2 + 260, "#8b5cff"]];
+    for (let i = 0; i < balloons.length; i++) {
+      const bx = balloons[i][0] + Math.sin(t * 0.03 + i) * 8;
+      const by = 210 + Math.sin(t * 0.04 + i * 2) * 10;
+      ctx.strokeStyle = "#ccc"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(bx, by + 26); ctx.lineTo(bx, by + 70); ctx.stroke();
+      ctx.fillStyle = balloons[i][1];
+      ctx.beginPath(); ctx.ellipse(bx, by, 20, 26, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.beginPath(); ctx.ellipse(bx - 6, by - 8, 5, 8, 0, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // ---- cake with flickering candles (center table) ----
+    const cx = W / 2, ty = 400;
+    ctx.fillStyle = "#3a2a18"; ctx.fillRect(cx - 70, ty + 30, 140, 12);   // table
+    // cake body
+    ctx.fillStyle = "#f4d9e6"; ctx.fillRect(cx - 45, ty - 8, 90, 40);
+    ctx.fillStyle = "#e59abf"; ctx.fillRect(cx - 45, ty - 8, 90, 8); // frosting
+    ctx.fillStyle = "#c76b93"; for (let dx = -36; dx <= 36; dx += 18) { ctx.beginPath(); ctx.arc(cx + dx, ty, 4, 0, Math.PI * 2); ctx.fill(); }
+    // candles + flames
+    for (let dx = -30; dx <= 30; dx += 30) {
+      ctx.fillStyle = "#fff"; ctx.fillRect(cx + dx - 2, ty - 26, 4, 18);
+      const fl = 3 + Math.sin(t * 0.4 + dx) * 1.5;
+      ctx.fillStyle = "#ffcf5c";
+      ctx.beginPath(); ctx.ellipse(cx + dx, ty - 30, 3, fl + 3, 0, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // ---- guests (friends & family) bouncing / waving ----
+    for (const gst of party.guests) {
+      const by = gst.y + Math.abs(Math.sin(t * 0.12 + gst.bob)) * -8; // little bounce
+      drawPartyPerson(gst.x, by, gst.c, gst.hair, gst.tall, t);
+    }
+
+    // ---- the spy walking in from the left ----
+    drawPartyPerson(party.spyX, 300 + Math.abs(Math.sin(t * 0.25)) * -4, "#20243b", "#5b3a1e", false, t, true);
+
+    // ---- confetti ----
+    for (const c of party.confetti) {
+      ctx.save();
+      ctx.translate(c.x, c.y); ctx.rotate(c.rot);
+      ctx.fillStyle = c.c; ctx.fillRect(-c.sz / 2, -c.sz / 2, c.sz, c.sz);
+      ctx.restore();
+    }
+
+    // hint to continue
+    if (t > 90) {
+      ctx.fillStyle = "rgba(255,255,255," + (0.5 + 0.5 * Math.sin(t * 0.1)) + ")";
+      ctx.font = "14px Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("tap to continue", W / 2, H - 24);
+      ctx.textAlign = "left";
+    }
+  }
+
+  // A little party character (body + head + hair); spy has a pink belt + ponytail.
+  function drawPartyPerson(x, y, color, hair, tall, t, isSpy) {
+    const h = tall ? 66 : 58;
+    const w = 22;
+    // body
+    ctx.fillStyle = color; ctx.fillRect(x, y + 14, w, h - 14);
+    // head
+    ctx.fillStyle = "#e8c7a0"; ctx.fillRect(x + 4, y, w - 8, 14);
+    // hair
+    ctx.fillStyle = hair; ctx.fillRect(x + 3, y - 2, w - 6, 6);
+    if (isSpy) {
+      ctx.fillStyle = hair; ctx.fillRect(x - 3, y + 1, 4, 16);          // ponytail
+      ctx.fillStyle = "#ff5c8a"; ctx.fillRect(x, y + 22, w, 3);          // pink belt
+    }
+    // waving arm
+    const wave = Math.sin(t * 0.2 + x) * 8;
+    ctx.strokeStyle = color; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(x + w, y + 22); ctx.lineTo(x + w + 8, y + 12 + wave); ctx.stroke();
+    // legs
+    ctx.strokeStyle = "#2a2a33"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(x + 6, y + h); ctx.lineTo(x + 6, y + h + 12); ctx.moveTo(x + w - 6, y + h); ctx.lineTo(x + w - 6, y + h + 12); ctx.stroke();
+  }
+
   const BIRTHDAY_MESSAGE = "Happy Birthday Risa-san! You brought the house down at the immersive theater " +
     "and cleared the operation. Nice spy work and action there agent. Thank you for always answering " +
     "all my questions, even the stupid ones, and being patient with me and understanding my bad Japanese. " +
@@ -1501,7 +1664,6 @@
   function onGameWin() {
     state.mode = "win";
     Sfx.stopMusic();
-    Sfx.happyBirthday();
     showMessage(
       "🎂 Happy Birthday, Risa-san! 🎉",
       BIRTHDAY_MESSAGE,
@@ -2208,6 +2370,12 @@
       updateWeb();
       updateClues();
       updateCamera();
+    }
+    if (state.mode === "celebration") {
+      updateCelebration();
+      drawCelebration();
+      requestAnimationFrame(loop);
+      return;
     }
     if (level) draw();
     requestAnimationFrame(loop);

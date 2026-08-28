@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Immersive Theater Tokyo</title>
-  <link rel="stylesheet" href="style.css?v=10" />
+  <link rel="stylesheet" href="style.css?v=11" />
 </head>
 <body>
   <div id="game-wrap">
@@ -21,13 +21,17 @@
       <div class="pad pad-left">
         <button class="tbtn" data-key="left"  aria-label="Move left">◀</button>
         <button class="tbtn" data-key="right" aria-label="Move right">▶</button>
-        <button class="tbtn tbtn-shield" data-key="shield" aria-label="Shield (hold)">🛡️</button>
       </div>
       <div class="pad pad-right">
-        <button class="tbtn tbtn-web aimbtn"   data-key="web"   aria-label="Throw web (drag to aim)">🕸️</button>
-        <button class="tbtn tbtn-shoot aimbtn" data-key="shoot" aria-label="Shoot (drag to aim)">🔫</button>
-        <button class="tbtn tbtn-bomb aimbtn"  data-key="bomb"  aria-label="Throw bomb (drag to aim)">💣</button>
-        <button class="tbtn tbtn-jump"  data-key="jump"  aria-label="Jump">⤒</button>
+        <!-- bomb sits apart (its own group) so it isn't next to shoot -->
+        <div class="subpad subpad-bomb">
+          <button class="tbtn tbtn-bomb aimbtn" data-key="bomb" aria-label="Throw bomb (drag to aim)">💣</button>
+        </div>
+        <div class="subpad subpad-main">
+          <button class="tbtn tbtn-web aimbtn"   data-key="web"   aria-label="Throw web (drag to aim)">🕸️</button>
+          <button class="tbtn tbtn-shoot aimbtn" data-key="shoot" aria-label="Shoot (drag to aim)">🔫</button>
+          <button class="tbtn tbtn-jump"  data-key="jump"  aria-label="Jump">⤒</button>
+        </div>
       </div>
     </div>
 
@@ -58,9 +62,9 @@
           Jump: <b>Space</b> &nbsp;|&nbsp;
           Shoot: <b>J / F</b> &nbsp;|&nbsp;
           Bomb: <b>K / B</b> &nbsp;|&nbsp;
-          Web-pull: <b>L / G</b> &nbsp;|&nbsp;
-          Shield (hold): <b>Shift / E</b><br/>
-          On touch: <b>◀ ▶</b> to move, jump &amp; <b>🛡️ shield</b> buttons, and <b>drag the 🔫 / 💣 / 🕸️ buttons to aim</b> (release to fire).
+          Web-pull: <b>L / G</b><br/>
+          On the boss level, grab the <b>🛡 shield</b> on the ground for protection.
+          On touch: <b>◀ ▶</b> to move, jump button, and <b>drag the 🔫 / 💣 / 🕸️ buttons to aim</b> (release to fire).
         </p>
       </div>
     </div>
@@ -73,6 +77,6 @@
     <p>Immersive Theater Tokyo plays best in landscape. Turn your device sideways to start.</p>
   </div>
 
-  <script src="game.js?v=10"></script>
+  <script src="game.js?v=11"></script>
 </body>
 </html>

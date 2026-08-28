@@ -88,7 +88,6 @@
     switch (action) {
       case "left":  keys["a"] = down; break;
       case "right": keys["d"] = down; break;
-      case "shield": keys["e"] = down; break; // hold to raise the shield
       case "shoot": keys["j"] = down; break;
       case "web":
         keys["l"] = down;
@@ -425,7 +424,6 @@
   const SHOOT = () => keys["j"] || keys["f"];
   const BOMB  = () => consume("k") || consume("b");
   const WEB   = () => consume("l") || consume("g");
-  const SHIELD = () => keys["Shift"] || keys["e"];
 
   // ---------------------------------------------------------------------
   // Geometry helpers
@@ -459,9 +457,7 @@
     bombCooldown: 0,
     webCooldown: 0,
     invuln: 0,
-    shieldActive: false,
-    shieldEnergy: 100,     // 0..100; drains while up, recharges while down
-    shieldLock: false,     // locked out after full depletion until recharged
+    hasShield: false,      // picked up the shield on the boss level (permanent for the level)
     coyote: 0,       // frames since last grounded (for coyote-time jumps)
     jumpBuffer: 0,   // frames since jump was pressed (for buffered jumps)
     reset(spawn) {
@@ -470,7 +466,7 @@
       this.onGround = false;
       this.hp = this.maxHp; this.invuln = 0; this.shootCooldown = 0;
       this.bombCooldown = 0; this.webCooldown = 0;
-      this.shieldActive = false; this.shieldEnergy = 100; this.shieldLock = false;
+      this.hasShield = false;
       this.coyote = 0; this.jumpBuffer = 0;
       this.facing = 1;
     }
@@ -484,6 +480,9 @@
   // Web/grapple: when active, a line is drawn from the spy to a grabbed
   // target which is reeled toward the spy. { target, life } or null.
   let web = null;
+
+  // Shield pickup lying on the boss-level ground: { x,y,w,h, taken } or null.
+  let shieldPickup = null;
 
   // ---------------------------------------------------------------------
   // Levels
@@ -647,11 +646,15 @@
     bombs.length = 0;
     explosions.length = 0;
     web = null;
+    shieldPickup = null;
     clues = [];
     collectedClues = [];
     camX = 0;
     boss = null;
     if (level.isBoss) {
+      // A shield lies on the ground near the start — walk over it to gain a
+      // protective layer for the whole boss level (optional).
+      shieldPickup = { x: 300, y: 470 - 30, w: 30, h: 30, taken: false };
       boss = {
         x: 720, y: 340, w: 60, h: 90,
         vx: 2.4, dir: -1, vy: 0,
@@ -830,25 +833,17 @@
     // Fell off the world
     if (player.y > H + 200) damagePlayer(35, true);
 
-    // Shield — hold to raise a bubble while energy remains. Drains while up,
-    // recharges while down. When it empties it locks out until recharged to
-    // 30%, so it can't flicker at empty. You can't shoot while shielding.
-    const wantShield = SHIELD();
-    if (wantShield && player.shieldEnergy > 0 && !player.shieldLock) {
-      player.shieldActive = true;
-      player.shieldEnergy = Math.max(0, player.shieldEnergy - 0.9);
-      if (player.shieldEnergy === 0) player.shieldLock = true;   // depleted
-    } else {
-      player.shieldActive = false;
-      player.shieldEnergy = Math.min(100, player.shieldEnergy + 0.45);
-      // Clear the lockout once recharged past 30% AND the button is released,
-      // so it can't auto re-raise while you keep holding after depletion.
-      if (player.shieldLock && player.shieldEnergy >= 30 && !wantShield) player.shieldLock = false;
+    // Shield pickup collection (boss level): walk over it to gain a permanent
+    // protective layer for the rest of the level.
+    if (shieldPickup && !shieldPickup.taken && rectsOverlap(player, shieldPickup)) {
+      shieldPickup.taken = true;
+      player.hasShield = true;
+      Sfx.win();  // a small triumphant pickup chime
     }
 
     // Shooting — fires along the aim direction (joystick / keyboard).
     if (player.shootCooldown > 0) player.shootCooldown--;
-    if (SHOOT() && !player.shieldActive && player.shootCooldown === 0) {
+    if (SHOOT() && player.shootCooldown === 0) {
       const speed = 9.5;
       const cx = player.x + player.w / 2;
       const cy = player.y + 14;
@@ -1017,9 +1012,9 @@
 
   function damagePlayer(amount, respawnPos) {
     if (player.invuln > 0) return;
-    // Shield blocks all incoming attacks (bullets, dash, contact) — but a
-    // fall off the world still respawns the player.
-    if (player.shieldActive && !respawnPos) { Sfx.bossHit(); return; }
+    // The collected shield blocks all combat damage — but a fall off the
+    // world still respawns the player.
+    if (player.hasShield && !respawnPos) { Sfx.bossHit(); return; }
     player.hp -= amount;
     player.invuln = 60;
     Sfx.hurt();
@@ -1515,6 +1510,7 @@
     drawPlatforms();
     drawGoal();
     drawClues();
+    drawShieldPickup();
     drawEnemies();
     drawBoss();
     drawBullets();
@@ -1742,7 +1738,7 @@
     ctx.setLineDash([]);
 
     // Shield bubble
-    if (player.shieldActive) {
+    if (player.hasShield) {
       const bcx = px + player.w / 2, bcy = py + player.h / 2;
       const r = 30 + Math.sin(state.time * 0.3) * 2;
       const g = ctx.createRadialGradient(bcx, bcy, 6, bcx, bcy, r);
@@ -2055,6 +2051,41 @@
     }
   }
 
+  // The shield pickup lying on the boss-level ground (until collected).
+  function drawShieldPickup() {
+    if (!shieldPickup || shieldPickup.taken) return;
+    const s = shieldPickup;
+    const cx = s.x + s.w / 2, cy = s.y + s.h / 2;
+    // glow
+    ctx.save();
+    const pulse = 0.5 + 0.5 * Math.sin(state.time * 0.12);
+    ctx.globalAlpha = 0.3 + 0.35 * pulse;
+    ctx.fillStyle = "#6cc7ff";
+    ctx.beginPath(); ctx.arc(cx, cy - 2, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    // shield emblem (badge)
+    ctx.fillStyle = "#cfe6ff";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 14);
+    ctx.lineTo(cx + 12, cy - 8);
+    ctx.lineTo(cx + 12, cy + 4);
+    ctx.quadraticCurveTo(cx + 12, cy + 14, cx, cy + 18);
+    ctx.quadraticCurveTo(cx - 12, cy + 14, cx - 12, cy + 4);
+    ctx.lineTo(cx - 12, cy - 8);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "#2b6ea0"; ctx.lineWidth = 2; ctx.stroke();
+    // cross emblem
+    ctx.strokeStyle = "#2b6ea0"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 10); ctx.moveTo(cx - 7, cy + 1); ctx.lineTo(cx + 7, cy + 1); ctx.stroke();
+    // "pick me up" arrow
+    ctx.fillStyle = "#ffd166";
+    ctx.font = "bold 11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("↓ SHIELD", cx, cy - 26);
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+
   function drawHUD() {
     // health bar
     ctx.fillStyle = "#000a";
@@ -2067,17 +2098,14 @@
     ctx.font = "bold 13px sans-serif";
     ctx.fillText("HP", 24, 33);
 
-    // shield energy meter (under HP)
-    ctx.fillStyle = "#000a";
-    ctx.fillRect(16, 42, 204, 16);
-    ctx.fillStyle = "#28304a";
-    ctx.fillRect(18, 44, 200, 12);
-    const se = player.shieldEnergy / 100;
-    ctx.fillStyle = player.shieldActive ? "#6cc7ff" : (se >= 1 ? "#4a9fd8" : "#3a6a90");
-    ctx.fillRect(18, 44, 200 * se, 12);
-    ctx.fillStyle = "#cfe6ff";
-    ctx.font = "bold 10px sans-serif";
-    ctx.fillText("🛡 SHIELD", 22, 54);
+    // shield status badge (only when the shield has been picked up)
+    if (player.hasShield) {
+      ctx.fillStyle = "#000a";
+      ctx.fillRect(16, 42, 120, 18);
+      ctx.fillStyle = "#6cc7ff";
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText("🛡 SHIELDED", 22, 55);
+    }
 
     // level name
     ctx.fillStyle = "#c3c9dc";

@@ -120,7 +120,9 @@ b { color: #e8ecf5; }
   pointer-events: auto;
 }
 .pad-left  { align-items: flex-end; }
-.pad-right { align-items: flex-end; }
+.pad-right { align-items: flex-end; gap: 40px; }   /* big gap between bomb and the rest */
+.subpad { display: flex; gap: 10px; align-items: flex-end; pointer-events: auto; }
+.subpad-bomb { align-self: flex-start; }           /* raise the bomb up a bit too */
 
 /* Aim buttons (shoot/bomb/web) are drag-to-aim; let them capture drags. */
 .aimbtn { touch-action: none; }
@@ -151,7 +153,6 @@ b { color: #e8ecf5; }
 .tbtn-shoot { background: rgba(120, 30, 40, 0.55); }
 .tbtn-bomb  { background: rgba(60, 50, 20, 0.55); }
 .tbtn-web   { background: rgba(30, 60, 80, 0.55); }
-.tbtn-shield{ background: rgba(30, 70, 100, 0.6); }
 
 /* Slightly larger touch targets on bigger screens */
 @media (min-width: 700px) and (pointer: coarse) {

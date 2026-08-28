@@ -113,6 +113,7 @@ b { color: #e8ecf5; }
 }
 
 #touch-controls.hidden { display: none; }
+#touch-controls.force-hidden { display: none !important; }
 
 .pad {
   display: flex;

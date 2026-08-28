@@ -989,8 +989,31 @@
       const px = player.x + player.w / 2;
       const targetX = px + player.facing * STOP_GAP; // where we pull them to
       const tx = t.x + t.w / 2;
-      const pull = (targetX - tx) * 0.28;  // ease the enemy toward that point
-      t.x += pull;
+      let pull = (targetX - tx) * 0.28;     // ease the enemy toward that point
+      // Clamp the per-frame step and move in small sub-steps, stopping if a
+      // platform blocks the way — so the guard never tunnels into a step/wall.
+      pull = Math.max(-7, Math.min(7, pull));
+      const dir = pull >= 0 ? 1 : -1;
+      let remaining = Math.abs(pull);
+      while (remaining > 0) {
+        const step = Math.min(1.5, remaining);
+        t.x += dir * step;
+        // if this puts the guard inside a platform, back it out and stop
+        let blocked = false;
+        for (const p of level.platforms) {
+          if (rectsOverlap(t, p)) {
+            // only block horizontal movement into a solid side (not when it's
+            // just resting on top): back out along x
+            const fromTop = (t.y + t.h) - p.y;
+            if (fromTop > 6) {  // genuinely overlapping the side, not standing on it
+              t.x -= dir * step;
+              blocked = true;
+            }
+          }
+        }
+        if (blocked) break;
+        remaining -= step;
+      }
       t.stun = WEB_STUN;                   // keep them stunned while/after reeling
       t.showHp = 120;
       if (!web.damaged) {
@@ -1509,6 +1532,10 @@
   function startCelebration() {
     state.mode = "celebration";
     state.celebrationTimer = 0;
+    // hide the on-screen controls during the cutscene
+    if (touchControls) touchControls.classList.add("force-hidden");
+    const _mb = document.getElementById("mute-btn"); if (_mb) _mb.style.display = "none";
+    const _fs = document.getElementById("fs-btn");  if (_fs) _fs.style.display = "none";
     party.spyX = -60;
     party.candlesLit = true;
     party.blewAt = 0;
@@ -1649,25 +1676,28 @@
       ctx.restore();
     }
 
-    // ---- captions ----
+    // ---- captions (upper-middle so they're always visible) ----
     ctx.textAlign = "center";
     if (party.candlesLit) {
-      // subtle prompt while she walks up / before blowing
-      if (t > 60) {
+      if (t > 40) {
+        // backing panel so the text reads over the busy scene
+        ctx.fillStyle = "rgba(10,8,20,0.55)";
+        ctx.fillRect(W / 2 - 190, 250, 380, 40);
         ctx.fillStyle = "#ffe9b0";
-        ctx.font = "16px Segoe UI, sans-serif";
-        ctx.fillText("Make a wish, Risa-san…", W / 2, H - 26);
+        ctx.font = "bold 22px Segoe UI, sans-serif";
+        ctx.fillText("Make a wish, Risa-san…", W / 2, 278);
       }
     } else {
       const age = t - party.blewAt;
-      // big celebratory line after the candles are blown
+      ctx.fillStyle = "rgba(10,8,20,0.55)";
+      ctx.fillRect(W / 2 - 190, 244, 380, 56);
       ctx.fillStyle = "#fff";
-      ctx.font = "bold 26px Segoe UI, sans-serif";
-      ctx.fillText("🎂  The End  🎂", W / 2, H - 46);
+      ctx.font = "bold 30px Segoe UI, sans-serif";
+      ctx.fillText("🎂  The End  🎂", W / 2, 284);
       if (age > 120) {
         ctx.fillStyle = "rgba(255,255,255," + (0.5 + 0.5 * Math.sin(t * 0.1)) + ")";
         ctx.font = "13px Segoe UI, sans-serif";
-        ctx.fillText("tap to finish", W / 2, H - 20);
+        ctx.fillText("tap to finish", W / 2, 312);
       }
     }
     ctx.textAlign = "left";
@@ -2425,6 +2455,10 @@
     loadLevel(0);
     state.mode = "play";
     hideMessage();
+    // restore on-screen controls (in case they were hidden by a prior celebration)
+    if (touchControls) touchControls.classList.remove("force-hidden");
+    const _mb = document.getElementById("mute-btn"); if (_mb) _mb.style.display = "";
+    const _fs = document.getElementById("fs-btn");  if (_fs) _fs.style.display = "";
     Sfx.unlock();      // resume AudioContext on this user gesture
     Sfx.startMusic();
     enterFullscreenLandscape(); // try to go fullscreen + lock landscape on phones
@@ -2442,7 +2476,7 @@
     "You are the Nightingale, an elite spy. Move through the grand hall, the backstage rigging, and " +
     "the lighting catwalk. Take down the guards — each carries a torn piece of a photograph. Collect " +
     "every piece, tape the photo back together at each locked door to crack its riddle, then face " +
-    "The Impresario for the final act. Lob bombs and fire your web to yank guards in close.",
+    "The Impresario for the final act. Lob bombs and fire your rope to yank guards in close.",
     "Raise the Curtain",
     startGame
   );

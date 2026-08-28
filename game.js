@@ -329,7 +329,7 @@
       },
       shoot()     { tone(880, 0.09, "square", 0.16, 220); },
       jump()      { tone(360, 0.16, "square", 0.18, 720); },
-      hit()       { noise(0.09, 0.28, 1200); tone(200, 0.08, "sawtooth", 0.12, 90); },
+      hit()       { /* smacking hit sound removed by request */ },
       enemyDown() { noise(0.22, 0.32, 500); tone(160, 0.3, "sawtooth", 0.18, 60); },
       hurt()      { noise(0.18, 0.3, 300); tone(140, 0.22, "square", 0.16, 70); },
       bossHit()   { tone(120, 0.1, "sawtooth", 0.12, 80); },

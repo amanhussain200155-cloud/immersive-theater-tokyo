@@ -647,11 +647,14 @@
     boss = null;
     if (level.isBoss) {
       boss = {
-        x: 720, y: 360, w: 70, h: 110,
+        x: 720, y: 340, w: 60, h: 90,
         vx: 2.4, dir: -1, vy: 0,
+        onGround: false,
         hp: 360, maxHp: 360,
         phase: 1,
         shootTimer: 50,
+        jumpTimer: 90,    // frames until next hop to a platform
+        targetX: null,    // x it's hopping toward
         dashTimer: 200,   // frames until next dash (phase 3)
         dashing: 0,       // >0 while dashing (telegraph then lunge)
         windup: 0,        // telegraph frames before a dash
@@ -1123,58 +1126,87 @@
 
     // ----- Dash attack (phase 3): telegraph, then lunge toward the player -----
     if (boss.windup > 0) {
-      boss.windup--;                       // stand still and flash before dashing
-      if (boss.windup === 0) {
-        boss.dashing = 26;
-        boss.dir = pcx > bcx ? 1 : -1;
-      }
+      boss.windup--;
+      if (boss.windup === 0) { boss.dashing = 26; boss.dir = pcx > bcx ? 1 : -1; }
     } else if (boss.dashing > 0) {
       boss.dashing--;
-      boss.x += boss.dir * 8.5;            // fast lunge
+      boss.x += boss.dir * 8.5;
       if (rectsOverlap(player, boss)) damagePlayer(20);
     } else {
-      // Normal patrol movement; speed grows with rage.
-      const speed = 2.2 + rage * 2.4;
-      boss.x += speed * boss.dir;
-      if (boss.x < 80) { boss.x = 80; boss.dir = 1; }
-      if (boss.x + boss.w > level.worldW - 80) { boss.x = level.worldW - 80 - boss.w; boss.dir = -1; }
+      // ----- Hop around the platforms -----
+      // Pick a new target (a platform to jump onto, or the player's column)
+      // and leap toward it; jump more often as rage grows.
+      boss.jumpTimer--;
+      if (boss.onGround && boss.jumpTimer <= 0) {
+        const tops = level.platforms.filter(p => p.w <= 200); // the small stage platforms
+        // sometimes jump toward the player, sometimes to a random platform
+        let tx;
+        if (tops.length && Math.random() < 0.6) {
+          const p = tops[Math.floor(Math.random() * tops.length)];
+          tx = p.x + p.w / 2;
+        } else {
+          tx = pcx;
+        }
+        boss.targetX = tx;
+        boss.dir = tx > bcx ? 1 : -1;
+        boss.vy = -13.5;                       // leap up
+        boss.vx = 3.2 + rage * 1.5;            // horizontal hop speed
+        boss.onGround = false;
+        boss.jumpTimer = Math.max(60, 130 - rage * 60);
+      }
+
+      // horizontal drift toward target while airborne / on ground
+      if (boss.targetX != null) {
+        const dir = boss.targetX > bcx ? 1 : -1;
+        boss.x += dir * (boss.vx || 3);
+        if (Math.abs(boss.targetX - bcx) < 8) boss.targetX = null;
+      }
+      // clamp to arena
+      if (boss.x < 20) boss.x = 20;
+      if (boss.x + boss.w > level.worldW - 20) boss.x = level.worldW - 20 - boss.w;
 
       // schedule dashes only in phase 3
-      if (boss.phase === 3) {
+      if (boss.phase === 3 && boss.onGround) {
         boss.dashTimer--;
         if (boss.dashTimer <= 0) { boss.windup = 26; boss.dashTimer = 150 + Math.random() * 90; }
       }
     }
-    // keep the boss on the ground
-    boss.y = 360;
 
-    // ----- Shooting -----
+    // ----- Gravity + land on platforms (so it perches on the stages) -----
+    if (boss.dashing === 0 && boss.windup === 0) {
+      boss.vy += GRAVITY;
+      if (boss.vy > MAX_FALL) boss.vy = MAX_FALL;
+      boss.y += boss.vy;
+      boss.onGround = false;
+      for (const p of level.platforms) {
+        if (rectsOverlap(boss, p) && boss.vy >= 0 && (boss.y + boss.h) - p.y < 30) {
+          boss.y = p.y - boss.h; boss.vy = 0; boss.onGround = true;
+        }
+      }
+    }
+
+    // ----- Shooting: always aim at the player, from whatever height -----
     if (boss.windup === 0 && boss.dashing === 0) {
       boss.shootTimer--;
       if (boss.shootTimer <= 0) {
-        const bx = boss.x + boss.w / 2, by = boss.y + 40;
-        if (boss.phase === 1) {
-          // simple horizontal shot(s)
-          const dir = pcx > bcx ? 1 : -1;
-          enemyBullets.push({ x: bx, y: by, w: 9, h: 6, vx: dir * 5.5, vy: 0 });
-          boss.shootTimer = 60;
-        } else {
-          // phase 2/3: aimed shot at the player + a spread
-          const dx = pcx - bx, dy = (player.y + player.h / 2) - by;
-          const len = Math.hypot(dx, dy) || 1;
-          const sp = 5.5 + rage * 2.5;
-          const angles = boss.phase === 3 ? [-0.25, 0, 0.25] : [-0.15, 0.15];
-          for (const a of angles) {
-            const ca = Math.cos(a), sa = Math.sin(a);
-            const vx = (dx / len) * sp, vy = (dy / len) * sp;
-            enemyBullets.push({
-              x: bx, y: by, w: 9, h: 6,
-              vx: vx * ca - vy * sa,
-              vy: vx * sa + vy * ca,
-            });
-          }
-          boss.shootTimer = Math.max(30, 64 - rage * 30);
+        const bx = boss.x + boss.w / 2, by = boss.y + 34;
+        const dx = pcx - bx, dy = (player.y + player.h / 2) - by;
+        const len = Math.hypot(dx, dy) || 1;
+        const sp = 5.2 + rage * 2.6;
+        // wider, more frequent volleys as it rages
+        const angles = boss.phase === 1 ? [0]
+                     : boss.phase === 2 ? [-0.18, 0.18]
+                     : [-0.28, 0, 0.28];
+        for (const a of angles) {
+          const ca = Math.cos(a), sa = Math.sin(a);
+          const vx = (dx / len) * sp, vy = (dy / len) * sp;
+          enemyBullets.push({
+            x: bx, y: by, w: 9, h: 6,
+            vx: vx * ca - vy * sa,
+            vy: vx * sa + vy * ca,
+          });
         }
+        boss.shootTimer = boss.phase === 1 ? 52 : Math.max(28, 60 - rage * 30);
       }
     }
 

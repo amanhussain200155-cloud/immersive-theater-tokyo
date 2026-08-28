@@ -648,11 +648,15 @@
     if (level.isBoss) {
       boss = {
         x: 720, y: 360, w: 70, h: 110,
-        vx: 2, dir: -1,
-        hp: 300, maxHp: 300,
-        phase: 0,
-        shootTimer: 40,
-        chargeTimer: 0,
+        vx: 2.4, dir: -1, vy: 0,
+        hp: 360, maxHp: 360,
+        phase: 1,
+        shootTimer: 50,
+        dashTimer: 200,   // frames until next dash (phase 3)
+        dashing: 0,       // >0 while dashing (telegraph then lunge)
+        windup: 0,        // telegraph frames before a dash
+        webImmune: 0,     // brief immunity so web can't lock it forever
+        hitFlash: 0,
         alive: true,
       };
     }
@@ -900,8 +904,8 @@
       const dist = Math.hypot(ex - px, (e.y + e.h / 2) - py);
       if (dist < bestDist) { bestDist = dist; best = e; }
     }
-    // The boss can also be grabbed.
-    if (boss && boss.alive) {
+    // The boss can also be grabbed — but not while it's web-immune or dashing.
+    if (boss && boss.alive && boss.webImmune <= 0 && boss.dashing <= 0 && boss.windup <= 0) {
       const bx = boss.x + boss.w / 2;
       const dx = bx - px;
       if (Math.sign(dx) === player.facing || Math.abs(dx) <= 8) {
@@ -951,6 +955,7 @@
     }
     if (web.life <= 0) {
       if (t) t.webbed = false;
+      if (t === boss && boss) boss.webImmune = 150; // ~2.5s before it can be webbed again
       web = null;
     }
   }
@@ -1106,29 +1111,74 @@
   function updateBoss() {
     if (!boss || !boss.alive) return;
 
-    // Move back and forth on the platform
-    boss.x += boss.vx * boss.dir;
-    if (boss.x < 80) { boss.x = 80; boss.dir = 1; }
-    if (boss.x + boss.w > level.worldW - 80) { boss.x = level.worldW - 80 - boss.w; boss.dir = -1; }
+    if (boss.hitFlash > 0) boss.hitFlash--;
+    if (boss.webImmune > 0) boss.webImmune--;
 
-    // Aggression scales as hp drops
-    const rage = 1 - boss.hp / boss.maxHp;
+    const frac = boss.hp / boss.maxHp;
+    boss.phase = frac > 0.66 ? 1 : frac > 0.33 ? 2 : 3;
+    const rage = 1 - frac;
 
-    boss.shootTimer--;
-    if (boss.shootTimer <= 0) {
-      const dir = (player.x > boss.x) ? 1 : -1;
-      // spread shot
-      const spread = rage > 0.5 ? [-2, 0, 2] : [0];
-      for (const s of spread) {
-        enemyBullets.push({
-          x: boss.x + boss.w / 2, y: boss.y + 30,
-          w: 9, h: 6, vx: dir * (5 + rage * 3), vy: s,
-        });
+    const pcx = player.x + player.w / 2;
+    const bcx = boss.x + boss.w / 2;
+
+    // ----- Dash attack (phase 3): telegraph, then lunge toward the player -----
+    if (boss.windup > 0) {
+      boss.windup--;                       // stand still and flash before dashing
+      if (boss.windup === 0) {
+        boss.dashing = 26;
+        boss.dir = pcx > bcx ? 1 : -1;
       }
-      boss.shootTimer = Math.max(24, 70 - rage * 40);
+    } else if (boss.dashing > 0) {
+      boss.dashing--;
+      boss.x += boss.dir * 8.5;            // fast lunge
+      if (rectsOverlap(player, boss)) damagePlayer(20);
+    } else {
+      // Normal patrol movement; speed grows with rage.
+      const speed = 2.2 + rage * 2.4;
+      boss.x += speed * boss.dir;
+      if (boss.x < 80) { boss.x = 80; boss.dir = 1; }
+      if (boss.x + boss.w > level.worldW - 80) { boss.x = level.worldW - 80 - boss.w; boss.dir = -1; }
+
+      // schedule dashes only in phase 3
+      if (boss.phase === 3) {
+        boss.dashTimer--;
+        if (boss.dashTimer <= 0) { boss.windup = 26; boss.dashTimer = 150 + Math.random() * 90; }
+      }
+    }
+    // keep the boss on the ground
+    boss.y = 360;
+
+    // ----- Shooting -----
+    if (boss.windup === 0 && boss.dashing === 0) {
+      boss.shootTimer--;
+      if (boss.shootTimer <= 0) {
+        const bx = boss.x + boss.w / 2, by = boss.y + 40;
+        if (boss.phase === 1) {
+          // simple horizontal shot(s)
+          const dir = pcx > bcx ? 1 : -1;
+          enemyBullets.push({ x: bx, y: by, w: 9, h: 6, vx: dir * 5.5, vy: 0 });
+          boss.shootTimer = 60;
+        } else {
+          // phase 2/3: aimed shot at the player + a spread
+          const dx = pcx - bx, dy = (player.y + player.h / 2) - by;
+          const len = Math.hypot(dx, dy) || 1;
+          const sp = 5.5 + rage * 2.5;
+          const angles = boss.phase === 3 ? [-0.25, 0, 0.25] : [-0.15, 0.15];
+          for (const a of angles) {
+            const ca = Math.cos(a), sa = Math.sin(a);
+            const vx = (dx / len) * sp, vy = (dy / len) * sp;
+            enemyBullets.push({
+              x: bx, y: by, w: 9, h: 6,
+              vx: vx * ca - vy * sa,
+              vy: vx * sa + vy * ca,
+            });
+          }
+          boss.shootTimer = Math.max(30, 64 - rage * 30);
+        }
+      }
     }
 
-    if (rectsOverlap(player, boss)) damagePlayer(24);
+    if (rectsOverlap(player, boss)) damagePlayer(18);
   }
 
   // ---------------------------------------------------------------------
@@ -1162,7 +1212,10 @@
       }
       // vs boss
       if (!hit && boss && boss.alive && rectsOverlap(b, boss)) {
-        boss.hp -= 10;
+        // The boss is armored while lunging/winding up — hit it between attacks.
+        const armored = (boss.dashing > 0 || boss.windup > 0);
+        boss.hp -= armored ? 3 : 10;
+        boss.hitFlash = 5;
         hit = true;
         Sfx.bossHit();
         if (boss.hp <= 0) { boss.hp = 0; boss.alive = false; onBossDefeated(); }
@@ -1347,8 +1400,13 @@
   function showMessage(title, body, buttonLabel, onClick) {
     msgTitle.textContent = title;
     msgBody.textContent = body;
-    msgButton.textContent = buttonLabel;
-    msgButton.onclick = onClick;
+    if (buttonLabel) {
+      msgButton.textContent = buttonLabel;
+      msgButton.onclick = onClick;
+      msgButton.style.display = "";
+    } else {
+      msgButton.style.display = "none";   // final screen — no button
+    }
     msgOverlay.classList.remove("hidden");
   }
   function hideMessage() { msgOverlay.classList.add("hidden"); }
@@ -1373,14 +1431,16 @@
     showMessage(
       "🎂 Happy Birthday, Risa-san! 🎉",
       BIRTHDAY_MESSAGE,
-      "Encore (Play Again)",
+      "Mission Complete",
       () => {
-        levels = makeLevels();
-        state.levelIndex = 0;
-        loadLevel(0);
-        state.mode = "play";
-        hideMessage();
-        Sfx.startMusic();
+        // End the game — show a final screen with no further options.
+        state.mode = "ended";
+        showMessage(
+          "✅ Mission Complete",
+          "Thanks for playing, agent. 🎭  The End.",
+          null,          // no button — the game is over
+          null
+        );
       }
     );
   }
@@ -1661,14 +1721,29 @@
 
   function drawBoss() {
     if (!boss || !boss.alive) return;
-    ctx.fillStyle = "#3a1140";
+    const windup = boss.windup > 0;
+    const dashing = boss.dashing > 0;
+    // body — flashes bright during wind-up (telegraph) and hit
+    let body = "#3a1140";
+    if (boss.hitFlash > 0) body = "#ffffff";
+    else if (windup && Math.floor(state.time / 3) % 2 === 0) body = "#ff5c8a";
+    else if (dashing) body = "#7a1550";
+    ctx.fillStyle = body;
     ctx.fillRect(boss.x, boss.y, boss.w, boss.h);
     ctx.fillStyle = "#8b2bb0";
     ctx.fillRect(boss.x + 8, boss.y + 8, boss.w - 16, 30);
-    // eyes
-    ctx.fillStyle = "#ff3b6b";
+    // eyes (glow brighter as it rages / dashes)
+    ctx.fillStyle = (windup || dashing) ? "#ffd166" : "#ff3b6b";
     ctx.fillRect(boss.x + 16, boss.y + 18, 8, 8);
     ctx.fillRect(boss.x + boss.w - 24, boss.y + 18, 8, 8);
+    // wind-up warning ring
+    if (windup) {
+      ctx.strokeStyle = "rgba(255,92,138,0.7)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(boss.x + boss.w / 2, boss.y + boss.h / 2, 60 + Math.sin(state.time * 0.4) * 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   function drawBullets() {

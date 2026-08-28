@@ -1,0 +1,1740 @@
+/* =========================================================================
+   Operation: Nightingale — a browser-based spy platformer
+   Single-file engine: game loop, physics, player, enemies, levels,
+   riddle gates, boss fight, and win screen.
+   ========================================================================= */
+
+(() => {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Canvas / constants
+  // ---------------------------------------------------------------------
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width;   // 960
+  const H = canvas.height;  // 540
+
+  const GRAVITY = 0.6;
+  const MAX_FALL = 14;
+  const MOVE_SPEED = 4.2;
+  const JUMP_VELOCITY = -13.6;
+  const CLIMB_SPEED = 3;
+  const FRICTION = 0.8;
+  const COYOTE_FRAMES = 7;   // grace period to still jump just after leaving a ledge
+  const JUMP_BUFFER = 7;     // remember a jump press slightly before landing
+
+  // ---------------------------------------------------------------------
+  // Input
+  // ---------------------------------------------------------------------
+  const keys = {};
+  const pressed = {}; // one-shot presses (consumed on read)
+
+  window.addEventListener("keydown", (e) => {
+    // prevent page scroll on arrows/space while playing
+    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) {
+      if (state.mode === "play") e.preventDefault();
+    }
+    const k = normKey(e.key);
+    if (!keys[k]) pressed[k] = true;
+    keys[k] = true;
+  });
+  window.addEventListener("keyup", (e) => { keys[normKey(e.key)] = false; });
+
+  // ---- On-screen touch controls ----------------------------------------
+  // Each button maps to the same key state the keyboard uses, so the rest
+  // of the game logic needs no changes.
+  const touchControls = document.getElementById("touch-controls");
+
+  function setTouchKey(action, down) {
+    switch (action) {
+      case "left":  keys["a"] = down; break;
+      case "right": keys["d"] = down; break;
+      case "shoot": keys["j"] = down; break;
+      case "bomb":
+        keys["k"] = down;
+        if (down) pressed["k"] = true; // fire the one-shot bomb throw
+        break;
+      case "jump":
+        keys["space"] = down;
+        if (down) pressed["space"] = true; // fire the buffered one-shot jump
+        break;
+    }
+  }
+
+  function bindTouchButton(btn) {
+    const action = btn.getAttribute("data-key");
+    const press = (e) => {
+      e.preventDefault();
+      btn.classList.add("pressed");
+      setTouchKey(action, true);
+    };
+    const release = (e) => {
+      if (e) e.preventDefault();
+      btn.classList.remove("pressed");
+      setTouchKey(action, false);
+    };
+    // Touch
+    btn.addEventListener("touchstart", press, { passive: false });
+    btn.addEventListener("touchend", release, { passive: false });
+    btn.addEventListener("touchcancel", release, { passive: false });
+    // Mouse (so it also works when testing on desktop)
+    btn.addEventListener("mousedown", press);
+    btn.addEventListener("mouseup", release);
+    btn.addEventListener("mouseleave", release);
+  }
+
+  if (touchControls) {
+    touchControls.querySelectorAll(".tbtn").forEach(bindTouchButton);
+    // Reveal the controls the moment we see a touch, regardless of CSS media.
+    function revealTouch() {
+      touchControls.classList.remove("hidden");
+      window.removeEventListener("touchstart", revealTouch);
+    }
+    window.addEventListener("touchstart", revealTouch, { passive: true });
+    // Also reveal immediately on coarse-pointer / touch-capable devices.
+    if (("ontouchstart" in window) ||
+        (navigator.maxTouchPoints && navigator.maxTouchPoints > 0)) {
+      touchControls.classList.remove("hidden");
+    }
+  }
+
+  // ---- Mute toggle (button + 'M' key) ----
+  const muteBtn = document.getElementById("mute-btn");
+  function doToggleMute() {
+    const nowMuted = Sfx.toggleMute();
+    if (muteBtn) muteBtn.textContent = nowMuted ? "🔇" : "🔊";
+  }
+  if (muteBtn) {
+    muteBtn.addEventListener("click", (e) => { e.preventDefault(); Sfx.unlock(); doToggleMute(); });
+  }
+  window.addEventListener("keydown", (e) => { if (normKey(e.key) === "m") doToggleMute(); });
+
+  function normKey(k) {
+    if (k === " ") return "space";
+    return k.length === 1 ? k.toLowerCase() : k;
+  }
+  function consume(k) { if (pressed[k]) { pressed[k] = false; return true; } return false; }
+
+  // ---------------------------------------------------------------------
+  // Audio — synthesized with the Web Audio API (no external files, works
+  // offline). Must be resumed on a user gesture (browsers block autoplay),
+  // so Sfx.unlock() is called from the Start button.
+  // ---------------------------------------------------------------------
+  const Sfx = (() => {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    let ctxA = null;
+    let master = null;
+    let musicGain = null;
+    let musicTimer = null;
+    let muted = false;
+    let step = 0;
+
+    function ensure() {
+      if (!AC) return false;
+      if (!ctxA) {
+        ctxA = new AC();
+        master = ctxA.createGain();
+        master.gain.value = 0.6;
+        master.connect(ctxA.destination);
+        musicGain = ctxA.createGain();
+        musicGain.gain.value = 0.18;
+        musicGain.connect(master);
+      }
+      return true;
+    }
+
+    // One-shot beep/blip.
+    function tone(freq, dur, type = "square", gain = 0.25, slideTo = null) {
+      if (muted || !ensure()) return;
+      const t = ctxA.currentTime;
+      const osc = ctxA.createOscillator();
+      const g = ctxA.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t);
+      if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(gain, t);
+      g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+      osc.connect(g); g.connect(master);
+      osc.start(t); osc.stop(t + dur + 0.02);
+    }
+
+    // Short noise burst (for hits / hurt).
+    function noise(dur, gain = 0.3, hp = 800) {
+      if (muted || !ensure()) return;
+      const t = ctxA.currentTime;
+      const n = Math.floor(ctxA.sampleRate * dur);
+      const buf = ctxA.createBuffer(1, n, ctxA.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+      const src = ctxA.createBufferSource(); src.buffer = buf;
+      const filt = ctxA.createBiquadFilter(); filt.type = "highpass"; filt.frequency.value = hp;
+      const g = ctxA.createGain(); g.gain.value = gain;
+      src.connect(filt); filt.connect(g); g.connect(master);
+      src.start(t);
+    }
+
+    // A gentle, Japanese-pentatonic-flavored looping melody for the theater.
+    const SCALE = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5]; // C D E G A C
+    function musicStep() {
+      if (muted || !ensure()) return;
+      // bass pulse
+      tone(SCALE[step % 3] / 4, 0.5, "triangle", 0.12);
+      // melody note (skips around the scale)
+      const idx = (step * 3 + (step % 2 ? 2 : 0)) % SCALE.length;
+      tone(SCALE[idx], 0.32, "sine", 0.16);
+      if (step % 4 === 0) noise(0.05, 0.05, 4000); // soft hat
+      step++;
+    }
+
+    return {
+      unlock() {
+        if (!ensure()) return;
+        if (ctxA.state === "suspended") ctxA.resume();
+      },
+      shoot()     { tone(880, 0.09, "square", 0.16, 220); },
+      jump()      { tone(360, 0.16, "square", 0.18, 720); },
+      hit()       { noise(0.09, 0.28, 1200); tone(200, 0.08, "sawtooth", 0.12, 90); },
+      enemyDown() { noise(0.22, 0.32, 500); tone(160, 0.3, "sawtooth", 0.18, 60); },
+      hurt()      { noise(0.18, 0.3, 300); tone(140, 0.22, "square", 0.16, 70); },
+      bossHit()   { tone(120, 0.1, "sawtooth", 0.12, 80); },
+      win()       { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.28, "sine", 0.25), i * 140)); },
+      lose()      { [440, 349, 262].forEach((f, i) => setTimeout(() => tone(f, 0.35, "triangle", 0.22), i * 180)); },
+      // The "Happy Birthday to You" melody. [freq, beats] pairs; 0 = rest.
+      happyBirthday() {
+        if (!ensure()) return;
+        const G4=392.00, A4=440.00, B4=493.88, C5=523.25, D5=587.33,
+              E5=659.25, F5=698.46, G5=783.99;
+        const beat = 340; // ms per beat
+        const notes = [
+          // Hap-py birth-day to you
+          [G4,0.75],[G4,0.25],[A4,1],[G4,1],[C5,1],[B4,2],
+          // Hap-py birth-day to you
+          [G4,0.75],[G4,0.25],[A4,1],[G4,1],[D5,1],[C5,2],
+          // Hap-py birth-day dear Risa-san
+          [G4,0.75],[G4,0.25],[G5,1],[E5,1],[C5,1],[B4,1],[A4,2],
+          // Hap-py birth-day to you
+          [F5,0.75],[F5,0.25],[E5,1],[C5,1],[D5,1],[C5,2],
+        ];
+        let t = 0;
+        for (const [f, b] of notes) {
+          const dur = b * beat;
+          if (f > 0) {
+            const at = t;
+            setTimeout(() => tone(f, (dur / 1000) * 0.9, "triangle", 0.28), at);
+          }
+          t += dur;
+        }
+      },
+      startMusic() {
+        if (!ensure() || musicTimer) return;
+        step = 0;
+        musicTimer = setInterval(musicStep, 300);
+      },
+      stopMusic() { if (musicTimer) { clearInterval(musicTimer); musicTimer = null; } },
+      toggleMute() {
+        muted = !muted;
+        if (muted) this.stopMusic();
+        else this.startMusic();
+        return muted;
+      },
+      isMuted() { return muted; },
+    };
+  })();
+
+  // ---------------------------------------------------------------------
+  // Clue photos — optional real images loaded from ./images/<id>.<ext>.
+  // If a file exists and loads, the torn-photo mechanic uses the real photo;
+  // otherwise it falls back to a drawn placeholder (drawClueImage).
+  // To add a real photo: drop e.g. images/lantern.jpg (or .png) next to
+  // index.html. Filenames must match the level's clueImage id.
+  // ---------------------------------------------------------------------
+  const ClueImages = (() => {
+    const cache = {};   // id -> { img, ready:false, failed:false }
+    const EXTS = ["jpg", "png", "jpeg", "webp"];
+
+    function load(id) {
+      if (cache[id]) return cache[id];
+      const entry = { img: null, ready: false, failed: false };
+      cache[id] = entry;
+      // Try each extension in turn; first that loads wins.
+      let i = 0;
+      const tryNext = () => {
+        if (i >= EXTS.length) { entry.failed = true; return; }
+        const im = new Image();
+        im.onload = () => { entry.img = im; entry.ready = true; };
+        im.onerror = () => { i++; tryNext(); };
+        im.src = "images/" + id + "." + EXTS[i];
+      };
+      // Image may be unavailable in non-browser contexts; guard it.
+      if (typeof Image !== "undefined") tryNext(); else entry.failed = true;
+      return entry;
+    }
+
+    return {
+      preload(ids) { ids.forEach(load); },
+      // Returns a ready HTMLImageElement or null (use placeholder).
+      get(id) {
+        const e = cache[id] || load(id);
+        return (e && e.ready) ? e.img : null;
+      },
+    };
+  })();
+
+  const LEFT  = () => keys["a"] || keys["ArrowLeft"];
+  const RIGHT = () => keys["d"] || keys["ArrowRight"];
+  const UP    = () => keys["w"] || keys["ArrowUp"];
+  const DOWN  = () => keys["s"] || keys["ArrowDown"];
+  const JUMP  = () => consume("w") || consume("ArrowUp") || consume("space");
+  const SHOOT = () => keys["j"] || keys["f"];
+  const BOMB  = () => consume("k") || consume("b");
+
+  // ---------------------------------------------------------------------
+  // Geometry helpers
+  // ---------------------------------------------------------------------
+  function rectsOverlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x &&
+           a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  // ---------------------------------------------------------------------
+  // Global game state
+  // ---------------------------------------------------------------------
+  const state = {
+    mode: "menu",       // menu | play | riddle | win | dead
+    levelIndex: 0,
+    time: 0,
+    gatePrompt: 0,      // frames to show the "collect all clues" gate message
+  };
+
+  // ---------------------------------------------------------------------
+  // Player
+  // ---------------------------------------------------------------------
+  const player = {
+    x: 60, y: 300, w: 22, h: 38,
+    vx: 0, vy: 0,
+    onGround: false,
+    onRope: false,
+    facing: 1,
+    hp: 100, maxHp: 100,
+    shootCooldown: 0,
+    bombCooldown: 0,
+    invuln: 0,
+    coyote: 0,       // frames since last grounded (for coyote-time jumps)
+    jumpBuffer: 0,   // frames since jump was pressed (for buffered jumps)
+    reset(spawn) {
+      this.x = spawn.x; this.y = spawn.y;
+      this.vx = 0; this.vy = 0;
+      this.onGround = false; this.onRope = false;
+      this.hp = this.maxHp; this.invuln = 0; this.shootCooldown = 0;
+      this.bombCooldown = 0;
+      this.coyote = 0; this.jumpBuffer = 0;
+      this.facing = 1;
+    }
+  };
+
+  const bullets = [];      // player bullets
+  const enemyBullets = []; // hostile bullets
+  const bombs = [];        // thrown bombs (arc + gravity)
+  const explosions = [];   // active explosion effects (AoE + visual)
+
+  // ---------------------------------------------------------------------
+  // Levels
+  // Each level: platforms (solid rects), ladders, enemies, goal, spawn,
+  // camera width, and a riddle to unlock the goal.
+  // Coordinates are in world space; camera scrolls horizontally.
+  // ---------------------------------------------------------------------
+  function makeLevels() {
+    return [
+      // ---- LEVEL 1: the grand foyer ----
+      {
+        name: "The Grand Hall — Immersive Theater Tokyo",
+        theme: "foyer",
+        worldW: 2200,
+        spawn: { x: 60, y: 380 },
+        platforms: [
+          { x: 0,    y: 460, w: 420, h: 80 },
+          { x: 520,  y: 420, w: 260, h: 120 },
+          { x: 880,  y: 380, w: 220, h: 160 },
+          { x: 1200, y: 440, w: 200, h: 100 },
+          { x: 1500, y: 380, w: 180, h: 160 },
+          { x: 1780, y: 430, w: 420, h: 110 },
+          // balcony at the top of the rope (rope descends from its right end)
+          { x: 1150, y: 300, w: 150, h: 16 },
+        ],
+        ropes: [
+          { x: 1290, y: 300, w: 12, h: 150 },
+        ],
+        // One picture torn into pieces — one piece per guard. Collect all,
+        // then tape them together at the door to read the answer.
+        clueImage: "lantern",   // a paper lantern — the answer to L1's riddle
+        enemies: [
+          { x: 600, y: 372, patrol: [540, 740], clue: 0 },
+          { x: 1550, y: 332, patrol: [1510, 1650], clue: 1 },
+        ],
+        goal: { x: 2120, y: 350, w: 40, h: 80 },
+        riddle: {
+          title: "The Grand Hall Door",
+          text: "I hold a small fire but never burn the hand. I sway on a string and light the night's demand. What am I?",
+          answers: ["lantern", "a lantern", "paper lantern"],
+          hint: "Rows of these paper lights glow along the fort's halls."
+        }
+      },
+
+      // ---- LEVEL 2: backstage ----
+      {
+        name: "Backstage — Rigging & Dressing Rooms",
+        theme: "backstage",
+        worldW: 2600,
+        spawn: { x: 50, y: 380 },
+        platforms: [
+          { x: 0,    y: 460, w: 420, h: 80 },
+          { x: 520,  y: 430, w: 220, h: 110 },
+          { x: 840,  y: 400, w: 200, h: 140 },
+          { x: 1140, y: 430, w: 200, h: 110 },
+          { x: 1440, y: 400, w: 200, h: 140 },
+          { x: 1740, y: 430, w: 200, h: 110 },
+          { x: 2040, y: 400, w: 560, h: 140 },
+          // balcony at the top of the rope
+          { x: 720, y: 270, w: 150, h: 16 },
+        ],
+        ropes: [
+          { x: 860, y: 270, w: 12, h: 150 },
+        ],
+        clueImage: "mask",   // a theatrical mask — the answer to L2's riddle
+        enemies: [
+          { x: 560, y: 382, patrol: [530, 700], clue: 0 },
+          { x: 880, y: 352, patrol: [850, 1000], clue: 1 },
+          { x: 1480, y: 352, patrol: [1450, 1600], clue: 2 },
+          { x: 2100, y: 352, patrol: [2060, 2300], clue: 3 },
+        ],
+        goal: { x: 2520, y: 320, w: 40, h: 80 },
+        riddle: {
+          title: "The Dressing Room Lock",
+          text: "I have a face that is not my own, worn on a stage where true selves are unknown. What am I?",
+          answers: ["mask", "a mask", "theatre mask", "theater mask"],
+          hint: "Every actor in the fort hides behind one of these."
+        }
+      },
+
+      // ---- LEVEL 3: the catwalk ----
+      {
+        name: "The Catwalk — Stage Lighting Gantry",
+        theme: "catwalk",
+        worldW: 2400,
+        spawn: { x: 50, y: 360 },
+        platforms: [
+          { x: 0,    y: 460, w: 380, h: 80 },
+          { x: 480,  y: 430, w: 160, h: 110 },
+          { x: 740,  y: 400, w: 160, h: 140 },
+          { x: 1000, y: 430, w: 160, h: 110 },
+          { x: 1260, y: 400, w: 200, h: 140 },
+          { x: 1560, y: 430, w: 160, h: 110 },
+          { x: 1820, y: 400, w: 200, h: 140 },
+          { x: 2120, y: 360, w: 280, h: 180 },
+          // balcony at the top of the rope
+          { x: 1160, y: 300, w: 150, h: 16 },
+        ],
+        ropes: [
+          { x: 1300, y: 300, w: 12, h: 130 },
+        ],
+        clueImage: "key",   // a key — the answer to L3's riddle
+        enemies: [
+          { x: 760, y: 352, patrol: [740, 880], clue: 0 },
+          { x: 1290, y: 352, patrol: [1260, 1440], clue: 1 },
+          { x: 1860, y: 352, patrol: [1820, 2000], clue: 2 },
+        ],
+        goal: { x: 2320, y: 280, w: 40, h: 80 },
+        riddle: {
+          title: "The Catwalk Gate",
+          text: "Teeth that never chew, a body thin and worn; I turn once in the dark and a locked path is born. What am I?",
+          answers: ["key", "a key"],
+          hint: "It fits the lock that guards the final act."
+        }
+      },
+
+      // ---- LEVEL 4: BOSS ----
+      {
+        name: "The Grand Stage — Final Curtain",
+        theme: "stage",
+        worldW: 960,
+        spawn: { x: 80, y: 360 },
+        platforms: [
+          { x: 0,   y: 470, w: 960, h: 70 },
+          { x: 120, y: 360, w: 120, h: 20 },
+          { x: 720, y: 360, w: 120, h: 20 },
+          { x: 420, y: 280, w: 120, h: 20 },
+        ],
+        ladders: [],
+        ropes: [],
+        enemies: [],
+        goal: null,
+        isBoss: true
+      }
+    ];
+  }
+
+  let levels = makeLevels();
+  let level = null;
+  let enemies = [];
+  let boss = null;
+  let camX = 0;
+
+  // ---------------------------------------------------------------------
+  // Enemy factory
+  // ---------------------------------------------------------------------
+  function spawnEnemy(def) {
+    return {
+      x: def.x, y: def.y, w: 24, h: 34,
+      vx: 1,
+      dir: 1,
+      patrol: def.patrol,
+      hp: 30, maxHp: 30,
+      hitFlash: 0,     // frames of white flash after a hit
+      showHp: 0,       // frames to keep the health bar visible after a hit
+      clue: (typeof def.clue === "number") ? def.clue : -1, // clue piece this guard carries
+      shootTimer: 60 + Math.random() * 90,
+      alive: true,
+    };
+  }
+
+  // Collectible clue pieces dropped by killed guards, and the set the
+  // player has collected on the current level.
+  let clues = [];              // active pickups in the world
+  let collectedClues = [];     // clue ids the player has picked up (this level)
+
+  function loadLevel(index) {
+    level = levels[index];
+    player.reset(level.spawn);
+    enemies = (level.enemies || []).map(spawnEnemy);
+    bullets.length = 0;
+    enemyBullets.length = 0;
+    bombs.length = 0;
+    explosions.length = 0;
+    clues = [];
+    collectedClues = [];
+    camX = 0;
+    boss = null;
+    if (level.isBoss) {
+      boss = {
+        x: 720, y: 360, w: 70, h: 110,
+        vx: 2, dir: -1,
+        hp: 300, maxHp: 300,
+        phase: 0,
+        shootTimer: 40,
+        chargeTimer: 0,
+        alive: true,
+      };
+    }
+  }
+
+  // Spawn a collectible clue where a guard died (if that guard carried one).
+  function dropClue(e) {
+    if (!e || e.clue < 0 || !level.clueImage) return;
+    clues.push({
+      id: e.clue,                 // which torn piece (0..pieces-1)
+      x: e.x + e.w / 2,
+      y: e.y + e.h / 2,
+      baseY: e.y + e.h / 2,
+      bob: Math.random() * Math.PI * 2,
+      collected: false,
+    });
+  }
+
+  // Number of torn pieces = number of guards on this level.
+  function totalClues() { return level.clueImage ? (level.enemies ? level.enemies.length : 0) : 0; }
+  function allCluesCollected() { return collectedClues.length >= totalClues(); }
+
+  // Float the clue pickups and collect them on contact.
+  function updateClues() {
+    for (const c of clues) {
+      if (c.collected) continue;
+      c.bob += 0.08;
+      c.y = c.baseY + Math.sin(c.bob) * 5;
+      const pick = { x: c.x - 15, y: c.y - 15, w: 30, h: 30 };
+      if (rectsOverlap(player, pick)) {
+        c.collected = true;
+        if (!collectedClues.includes(c.id)) {
+          collectedClues.push(c.id);
+          Sfx.shoot(); // light pickup blip
+        }
+      }
+    }
+  }
+
+  // Move both axes, then for each overlapping platform push the entity out
+  // along the axis of LEAST penetration (minimum translation vector). This
+  // is robust against corner cases and never "wedges" an entity in place.
+  // ---------------------------------------------------------------------
+  function collidePlatforms(entity, platforms) {
+    entity.onGround = false;
+
+    entity.x += entity.vx;
+    entity.y += entity.vy;
+
+    // Resolve a few iterations so multi-platform overlaps settle cleanly.
+    for (let iter = 0; iter < 3; iter++) {
+      let resolvedAny = false;
+      for (const p of platforms) {
+        if (!rectsOverlap(entity, p)) continue;
+
+        // Overlap depth on each axis.
+        const overlapLeft   = (entity.x + entity.w) - p.x;      // pushing entity left
+        const overlapRight  = (p.x + p.w) - entity.x;           // pushing entity right
+        const overlapTop    = (entity.y + entity.h) - p.y;      // pushing entity up
+        const overlapBottom = (p.y + p.h) - entity.y;           // pushing entity down
+
+        const minX = Math.min(overlapLeft, overlapRight);
+        const minY = Math.min(overlapTop, overlapBottom);
+
+        if (minX < minY) {
+          // Resolve horizontally.
+          if (overlapLeft < overlapRight) { entity.x = p.x - entity.w; }
+          else { entity.x = p.x + p.w; }
+          entity.vx = 0;
+        } else {
+          // Resolve vertically.
+          if (overlapTop < overlapBottom) {
+            entity.y = p.y - entity.h;
+            entity.onGround = true;
+          } else {
+            entity.y = p.y + p.h;
+          }
+          entity.vy = 0;
+        }
+        resolvedAny = true;
+      }
+      if (!resolvedAny) break;
+    }
+  }
+
+  function overlapsAnyRope(entity, ropes) {
+    for (const l of ropes) if (rectsOverlap(entity, l)) return l;
+    return null;
+  }
+
+  // ---------------------------------------------------------------------
+  // Update: player
+  // ---------------------------------------------------------------------
+  function updatePlayer() {
+    const ropes = level.ropes || [];
+    const rope = overlapsAnyRope(player, ropes);
+
+    // Rope logic: grabbing on up/down attaches you; once attached you hang
+    // in place (no gravity) even when idle, until you press left/right to
+    // dismount or jump off. This makes climbing to the balcony reliable.
+    if (!rope) {
+      player.onRope = false;
+    } else {
+      if (UP() || DOWN()) player.onRope = true;           // grab / keep climbing
+      if (player.onRope && (LEFT() || RIGHT())) player.onRope = false; // step off sideways
+    }
+    if (player.onRope) {
+      player.vy = 0;
+      player.x += ((rope.x + rope.w / 2) - (player.x + player.w / 2)) * 0.4; // hug the rope
+      if (UP()) player.y -= CLIMB_SPEED;
+      if (DOWN()) player.y += CLIMB_SPEED;
+
+      // Climb-off-the-top: while climbing up, if the player's head reaches a
+      // platform (the balcony) that they horizontally overlap, lift them onto
+      // its top surface and let go — so the balcony doesn't block from below.
+      if (UP()) {
+        const head = player.y;
+        for (const p of level.platforms) {
+          if (p.h > 24) continue; // only thin balcony/ledge platforms
+          const xOverlap = (player.x + player.w > p.x + 2) && (player.x < p.x + p.w - 2);
+          if (xOverlap && head <= p.y + p.h + 6 && head >= p.y - player.h - 4) {
+            player.y = p.y - player.h;
+            player.onRope = false;
+            player.onGround = true;
+            break;
+          }
+        }
+      }
+    }
+
+    // Horizontal movement
+    if (LEFT())  { player.vx = -MOVE_SPEED; player.facing = -1; }
+    else if (RIGHT()) { player.vx = MOVE_SPEED; player.facing = 1; }
+    else { player.vx *= FRICTION; if (Math.abs(player.vx) < 0.1) player.vx = 0; }
+
+    // Jump — with coyote time (grace after leaving a ledge) and jump
+    // buffering (press slightly before landing still registers).
+    if (JUMP()) player.jumpBuffer = JUMP_BUFFER;
+    if (player.jumpBuffer > 0) player.jumpBuffer--;
+
+    const canJump = player.onGround || player.onRope || player.coyote > 0;
+    if (player.jumpBuffer > 0 && canJump) {
+      player.vy = JUMP_VELOCITY;
+      player.onGround = false;
+      player.onRope = false;
+      player.coyote = 0;
+      player.jumpBuffer = 0;
+      Sfx.jump();
+    }
+
+    // Gravity (skip while climbing)
+    if (!player.onRope) {
+      player.vy += GRAVITY;
+      if (player.vy > MAX_FALL) player.vy = MAX_FALL;
+    }
+
+    collidePlatforms(player, level.platforms);
+
+    // Coyote time: refresh when grounded, otherwise count down.
+    if (player.onGround) player.coyote = COYOTE_FRAMES;
+    else if (player.coyote > 0) player.coyote--;
+
+    // World bounds
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.w > level.worldW) player.x = level.worldW - player.w;
+
+    // Fell off the world
+    if (player.y > H + 200) damagePlayer(35, true);
+
+    // Shooting
+    if (player.shootCooldown > 0) player.shootCooldown--;
+    if (SHOOT() && player.shootCooldown === 0) {
+      bullets.push({
+        x: player.facing > 0 ? player.x + player.w : player.x - 6,
+        y: player.y + 14, w: 8, h: 4,
+        vx: player.facing * 9,
+      });
+      player.shootCooldown = 12;
+      Sfx.shoot();
+    }
+
+    // Throwing bombs — lobbed in an arc in the facing direction.
+    if (player.bombCooldown > 0) player.bombCooldown--;
+    if (BOMB() && player.bombCooldown === 0) {
+      throwBomb();
+      player.bombCooldown = 45;
+    }
+
+    if (player.invuln > 0) player.invuln--;
+
+    // Reach goal -> riddle gate (only once all clue pieces are collected).
+    if (level.goal && rectsOverlap(player, level.goal)) {
+      if (allCluesCollected()) {
+        openRiddle();
+      } else {
+        state.gatePrompt = 90; // show "collect all clues" message briefly
+      }
+    }
+  }
+
+  // Lob a bomb: gravity-affected projectile that arcs forward/down and
+  // explodes on impact with ground, an enemy, the boss, or when the fuse ends.
+  function throwBomb() {
+    bombs.push({
+      x: player.x + player.w / 2,
+      y: player.y + 6,
+      w: 12, h: 12,
+      vx: player.facing * 6.2,
+      vy: -6.5,            // initial upward toss for the arc
+      fuse: 150,
+      spin: 0,
+    });
+    Sfx.jump(); // a light "toss" whoosh (reuse)
+  }
+
+  const EXPLOSION_RADIUS = 78;
+  const EXPLOSION_DAMAGE = 45;
+
+  function detonate(x, y) {
+    explosions.push({ x, y, r: 6, max: EXPLOSION_RADIUS, life: 22 });
+    Sfx.enemyDown();
+    // Damage all enemies within the blast radius.
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const ex = e.x + e.w / 2, ey = e.y + e.h / 2;
+      if (Math.hypot(ex - x, ey - y) <= EXPLOSION_RADIUS) {
+        e.hp -= EXPLOSION_DAMAGE;
+        e.hitFlash = 6; e.showHp = 120;
+        if (e.hp <= 0) { e.alive = false; dropClue(e); }
+      }
+    }
+    // Damage the boss if in range.
+    if (boss && boss.alive) {
+      const bx = boss.x + boss.w / 2, by = boss.y + boss.h / 2;
+      if (Math.hypot(bx - x, by - y) <= EXPLOSION_RADIUS + 20) {
+        boss.hp -= EXPLOSION_DAMAGE;
+        Sfx.bossHit();
+        if (boss.hp <= 0) { boss.hp = 0; boss.alive = false; onBossDefeated(); }
+      }
+    }
+    // Blast can also hurt the player if they're too close.
+    const px = player.x + player.w / 2, py = player.y + player.h / 2;
+    if (Math.hypot(px - x, py - y) <= EXPLOSION_RADIUS) damagePlayer(12);
+  }
+
+  function damagePlayer(amount, respawnPos) {
+    if (player.invuln > 0) return;
+    player.hp -= amount;
+    player.invuln = 60;
+    Sfx.hurt();
+    if (respawnPos) { player.x = level.spawn.x; player.y = level.spawn.y; player.vy = 0; }
+    if (player.hp <= 0) {
+      player.hp = 0;
+      state.mode = "dead";
+      Sfx.stopMusic();
+      Sfx.lose();
+      showMessage("Curtain Falls", "The Nightingale is down. Take it from the top.", "Retry Scene", () => {
+        state.mode = "play";
+        hideMessage();
+        loadLevel(state.levelIndex);
+        Sfx.startMusic();
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Update: enemies
+  // ---------------------------------------------------------------------
+  function updateEnemies() {
+    for (const e of enemies) {
+      if (!e.alive) continue;
+
+      if (e.hitFlash > 0) e.hitFlash--;
+      if (e.showHp > 0) e.showHp--;
+
+      // Patrol
+      e.x += e.vx * e.dir;
+      if (e.x < e.patrol[0]) { e.x = e.patrol[0]; e.dir = 1; }
+      if (e.x > e.patrol[1]) { e.x = e.patrol[1]; e.dir = -1; }
+
+      // Face the player if in range and shoot
+      const dx = (player.x) - e.x;
+      const dist = Math.abs(dx);
+      if (dist < 460) {
+        e.dir = dx > 0 ? 1 : -1;
+        e.shootTimer--;
+        if (e.shootTimer <= 0) {
+          enemyBullets.push({
+            x: e.dir > 0 ? e.x + e.w : e.x - 6,
+            y: e.y + 12, w: 7, h: 4,
+            vx: e.dir * 5.5,
+          });
+          e.shootTimer = 90 + Math.random() * 70;
+        }
+      }
+
+      // Contact damage
+      if (rectsOverlap(player, e)) damagePlayer(18);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Update: boss
+  // ---------------------------------------------------------------------
+  function updateBoss() {
+    if (!boss || !boss.alive) return;
+
+    // Move back and forth on the platform
+    boss.x += boss.vx * boss.dir;
+    if (boss.x < 80) { boss.x = 80; boss.dir = 1; }
+    if (boss.x + boss.w > level.worldW - 80) { boss.x = level.worldW - 80 - boss.w; boss.dir = -1; }
+
+    // Aggression scales as hp drops
+    const rage = 1 - boss.hp / boss.maxHp;
+
+    boss.shootTimer--;
+    if (boss.shootTimer <= 0) {
+      const dir = (player.x > boss.x) ? 1 : -1;
+      // spread shot
+      const spread = rage > 0.5 ? [-2, 0, 2] : [0];
+      for (const s of spread) {
+        enemyBullets.push({
+          x: boss.x + boss.w / 2, y: boss.y + 30,
+          w: 9, h: 6, vx: dir * (5 + rage * 3), vy: s,
+        });
+      }
+      boss.shootTimer = Math.max(24, 70 - rage * 40);
+    }
+
+    if (rectsOverlap(player, boss)) damagePlayer(24);
+  }
+
+  // ---------------------------------------------------------------------
+  // Update: bullets
+  // ---------------------------------------------------------------------
+  function updateBullets() {
+    // player bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.x += b.vx;
+      let hit = false;
+
+      // vs platforms
+      for (const p of level.platforms) {
+        if (rectsOverlap(b, p)) { hit = true; break; }
+      }
+      // vs enemies
+      if (!hit) {
+        for (const e of enemies) {
+          if (e.alive && rectsOverlap(b, e)) {
+            e.hp -= 12;
+            e.hitFlash = 6;
+            e.showHp = 120; // keep the health bar up ~2s after a hit
+            if (e.hp <= 0) { e.alive = false; Sfx.enemyDown(); dropClue(e); }
+            else { Sfx.hit(); }
+            hit = true;
+            break;
+          }
+        }
+      }
+      // vs boss
+      if (!hit && boss && boss.alive && rectsOverlap(b, boss)) {
+        boss.hp -= 10;
+        hit = true;
+        Sfx.bossHit();
+        if (boss.hp <= 0) { boss.hp = 0; boss.alive = false; onBossDefeated(); }
+      }
+
+      if (hit || b.x < -20 || b.x > level.worldW + 20) bullets.splice(i, 1);
+    }
+
+    // enemy bullets
+    for (let i = enemyBullets.length - 1; i >= 0; i--) {
+      const b = enemyBullets[i];
+      b.x += b.vx;
+      if (b.vy) b.y += b.vy;
+      let hit = false;
+      for (const p of level.platforms) {
+        if (rectsOverlap(b, p)) { hit = true; break; }
+      }
+      if (!hit && rectsOverlap(b, player)) { damagePlayer(10); hit = true; }
+      if (hit || b.x < -20 || b.x > level.worldW + 20) enemyBullets.splice(i, 1);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Update: bombs (arc + gravity) and explosions
+  // ---------------------------------------------------------------------
+  function updateBombs() {
+    for (let i = bombs.length - 1; i >= 0; i--) {
+      const b = bombs[i];
+      b.vy += GRAVITY * 0.9;
+      if (b.vy > MAX_FALL) b.vy = MAX_FALL;
+      b.x += b.vx;
+      b.y += b.vy;
+      b.spin += 0.3;
+      b.fuse--;
+
+      let blow = false;
+      // hit a platform (ground/wall)
+      for (const p of level.platforms) {
+        if (rectsOverlap(b, p)) { blow = true; break; }
+      }
+      // direct contact with an enemy or boss
+      if (!blow) {
+        for (const e of enemies) if (e.alive && rectsOverlap(b, e)) { blow = true; break; }
+      }
+      if (!blow && boss && boss.alive && rectsOverlap(b, boss)) blow = true;
+      // fuse ran out or fell off world
+      if (b.fuse <= 0 || b.y > H + 100) blow = true;
+
+      if (blow) {
+        detonate(b.x + b.w / 2, b.y + b.h / 2);
+        bombs.splice(i, 1);
+      }
+    }
+  }
+
+  function updateExplosions() {
+    for (let i = explosions.length - 1; i >= 0; i--) {
+      const ex = explosions[i];
+      ex.life--;
+      ex.r += (ex.max - ex.r) * 0.35; // rapid expand
+      if (ex.life <= 0) explosions.splice(i, 1);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Camera
+  // ---------------------------------------------------------------------
+  function updateCamera() {
+    const target = player.x + player.w / 2 - W / 2;
+    camX += (target - camX) * 0.12;
+    camX = Math.max(0, Math.min(camX, level.worldW - W));
+  }
+
+  // ---------------------------------------------------------------------
+  // Riddle gate
+  // ---------------------------------------------------------------------
+  const riddleOverlay = document.getElementById("riddle-overlay");
+  const riddleTitle = document.getElementById("riddle-title");
+  const riddleText = document.getElementById("riddle-text");
+  const riddleInput = document.getElementById("riddle-input");
+  const riddleSubmit = document.getElementById("riddle-submit");
+  const riddleHint = document.getElementById("riddle-hint");
+  const clueCanvas = document.getElementById("clue-canvas");
+  const clueCtx = clueCanvas ? clueCanvas.getContext("2d") : null;
+
+  // Reconstruct the ONE clue photo from its torn pieces on the riddle panel.
+  // Each guard dropped strip `i` of `n`; collected strips are taped back
+  // together to reveal the complete picture (the answer).
+  function drawCluePuzzle() {
+    if (!clueCtx) return;
+    const cw = clueCanvas.width, ch = clueCanvas.height;
+    clueCtx.clearRect(0, 0, cw, ch);
+    const id = level.clueImage;
+    const n = totalClues();
+    if (!id || n === 0) return;
+
+    // The full picture occupies a centered box; each strip is 1/n of its width.
+    const imgW = Math.min(cw - 40, 360);
+    const imgH = ch - 20;
+    const cx = cw / 2, cy = ch / 2;
+    const L = cx - imgW / 2;
+    const stripW = imgW / n;
+
+    for (let i = 0; i < n; i++) {
+      const have = collectedClues.includes(i);
+      const sL = L + i * stripW;
+      if (have) {
+        // draw this strip of the full image (taped in place)
+        drawCluePieceStrip(id, i, n, cx, cy, imgW, imgH, clueCtx, true);
+      } else {
+        // torn gap placeholder for a missing piece
+        clueCtx.fillStyle = "#14151f";
+        clueCtx.fillRect(sL, cy - imgH / 2, stripW, imgH);
+        clueCtx.strokeStyle = "#333a58";
+        clueCtx.setLineDash([4, 4]);
+        clueCtx.strokeRect(sL + 1, cy - imgH / 2 + 1, stripW - 2, imgH - 2);
+        clueCtx.setLineDash([]);
+        clueCtx.fillStyle = "#556";
+        clueCtx.font = "20px sans-serif";
+        clueCtx.textAlign = "center"; clueCtx.textBaseline = "middle";
+        clueCtx.fillText("?", sL + stripW / 2, cy);
+        clueCtx.textAlign = "left"; clueCtx.textBaseline = "alphabetic";
+      }
+    }
+    // outer frame
+    clueCtx.strokeStyle = allCluesCollected() ? "#31d17e" : "#7a6a3a";
+    clueCtx.lineWidth = 2;
+    clueCtx.strokeRect(L, cy - imgH / 2, imgW, imgH);
+  }
+
+  function openRiddle() {
+    if (state.mode !== "play") return;
+    state.mode = "riddle";
+    const r = level.riddle;
+    riddleTitle.textContent = r.title;
+    riddleText.textContent = r.text;
+    riddleInput.value = "";
+    riddleHint.textContent = "💡 Hint: " + r.hint;
+    const cap = document.getElementById("clue-caption");
+    if (cap) cap.textContent = "The guards' torn photo, taped back together — what is it?";
+    drawCluePuzzle();
+    riddleOverlay.classList.remove("hidden");
+    setTimeout(() => riddleInput.focus(), 30);
+  }
+
+  function submitRiddle() {
+    const r = level.riddle;
+    const guess = riddleInput.value.trim().toLowerCase().replace(/[.!?]/g, "");
+    if (r.answers.includes(guess)) {
+      riddleOverlay.classList.add("hidden");
+      advanceLevel();
+    } else {
+      riddleHint.textContent = "❌ Access denied. 💡 Hint: " + r.hint;
+      riddleInput.select();
+    }
+  }
+
+  riddleSubmit.addEventListener("click", submitRiddle);
+  riddleInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitRiddle();
+  });
+
+  function advanceLevel() {
+    state.levelIndex++;
+    if (state.levelIndex >= levels.length) {
+      // shouldn't happen (boss handles win) but guard anyway
+      onGameWin();
+      return;
+    }
+    loadLevel(state.levelIndex);
+    state.mode = "play";
+  }
+
+  // ---------------------------------------------------------------------
+  // Message overlay (start / win / death)
+  // ---------------------------------------------------------------------
+  const msgOverlay = document.getElementById("msg-overlay");
+  const msgTitle = document.getElementById("msg-title");
+  const msgBody = document.getElementById("msg-body");
+  const msgButton = document.getElementById("msg-button");
+
+  function showMessage(title, body, buttonLabel, onClick) {
+    msgTitle.textContent = title;
+    msgBody.textContent = body;
+    msgButton.textContent = buttonLabel;
+    msgButton.onclick = onClick;
+    msgOverlay.classList.remove("hidden");
+  }
+  function hideMessage() { msgOverlay.classList.add("hidden"); }
+
+  function onBossDefeated() {
+    Sfx.enemyDown();
+    // brief delay so the defeat reads on screen
+    setTimeout(onGameWin, 600);
+  }
+
+  // ===== BIRTHDAY MESSAGE =====
+  const BIRTHDAY_NAME = "Risa-san";
+  const BIRTHDAY_MESSAGE = "Happy Birthday Risa-san. You brought the house down at the immersive theater " +
+    "and cleared the operation. This little show was staged for you. Thank you for always answering " +
+    "all my questions. Wish you all the happiness! Have a very happy birthday!";
+
+  function onGameWin() {
+    state.mode = "win";
+    Sfx.stopMusic();
+    Sfx.happyBirthday();
+    showMessage(
+      "🎂 Happy Birthday, Risa-san! 🎉",
+      BIRTHDAY_MESSAGE,
+      "Encore (Play Again)",
+      () => {
+        levels = makeLevels();
+        state.levelIndex = 0;
+        loadLevel(0);
+        state.mode = "play";
+        hideMessage();
+        Sfx.startMusic();
+      }
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    drawBackground();
+
+    ctx.save();
+    ctx.translate(-camX, 0);
+
+    drawPlatforms();
+    drawRopes();
+    drawGoal();
+    drawClues();
+    drawEnemies();
+    drawBoss();
+    drawBullets();
+    drawBombs();
+    drawExplosions();
+    drawPlayer();
+
+    ctx.restore();
+
+    drawHUD();
+  }
+
+  function drawBackground() {
+    const theme = level.theme || "foyer";
+
+    // Deep interior gradient (warm theater dark).
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    if (theme === "stage") { g.addColorStop(0, "#2a0a14"); g.addColorStop(1, "#12060c"); }
+    else if (theme === "backstage") { g.addColorStop(0, "#0f0d1a"); g.addColorStop(1, "#161020"); }
+    else if (theme === "catwalk") { g.addColorStop(0, "#0a1020"); g.addColorStop(1, "#0e1428"); }
+    else { g.addColorStop(0, "#1a0f22"); g.addColorStop(1, "#241436"); } // foyer
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // --- Neon Tokyo skyline seen through the theater's tall windows ---
+    // (a lit cityscape behind the interior, parallax-scrolled)
+    const winTop = 60, winBot = 300;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, winTop, W, winBot - winTop);
+    ctx.clip();
+    // night sky behind the window
+    const sky = ctx.createLinearGradient(0, winTop, 0, winBot);
+    sky.addColorStop(0, "#241a3a");
+    sky.addColorStop(1, "#3a2050");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, winTop, W, winBot - winTop);
+    // skyline
+    const off = (camX * 0.25) % 130;
+    const neon = ["#ff5c8a", "#6cc7ff", "#ffd166", "#8b5cff", "#31d17e"];
+    for (let i = -1; i < W / 130 + 2; i++) {
+      const bx = i * 130 - off;
+      const bh = 70 + ((i * 47) % 120);
+      ctx.fillStyle = "#160e28";
+      ctx.fillRect(bx, winBot - bh, 96, bh);
+      // neon window rows
+      for (let wy = winBot - bh + 10; wy < winBot - 6; wy += 14) {
+        ctx.fillStyle = neon[(i + Math.floor(wy)) % neon.length] + "";
+        ctx.globalAlpha = 0.55;
+        ctx.fillRect(bx + 8, wy, 70, 3);
+        ctx.globalAlpha = 1;
+      }
+    }
+    // a glowing full moon / lantern in the sky
+    ctx.fillStyle = "#ffe1b0";
+    ctx.beginPath();
+    ctx.arc(W - 130, 120, 30, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // window frame mullions
+    ctx.strokeStyle = "#3a2b18";
+    ctx.lineWidth = 6;
+    ctx.strokeRect(0, winTop, W, winBot - winTop);
+    for (let x = 0; x < W; x += 240) {
+      ctx.beginPath(); ctx.moveTo(x, winTop); ctx.lineTo(x, winBot); ctx.stroke();
+    }
+
+    // --- Stage curtains framing the scene (theater proscenium) ---
+    const curtain = ctx.createLinearGradient(0, 0, 120, 0);
+    curtain.addColorStop(0, "#7a0f22");
+    curtain.addColorStop(1, "#3d0611");
+    // left curtain
+    ctx.fillStyle = curtain;
+    for (let i = 0; i < 5; i++) ctx.fillRect(i * 22, 0, 20, H);
+    // right curtain
+    ctx.save();
+    ctx.translate(W, 0); ctx.scale(-1, 1);
+    ctx.fillStyle = curtain;
+    for (let i = 0; i < 5; i++) ctx.fillRect(i * 22, 0, 20, H);
+    ctx.restore();
+    // valance (top curtain swag)
+    ctx.fillStyle = "#5c0b1a";
+    ctx.fillRect(0, 0, W, 26);
+    ctx.fillStyle = "#ffcf5c";
+    ctx.fillRect(0, 24, W, 3);
+
+    // --- Spotlights sweeping the stage (subtle, animated) ---
+    const sweep = Math.sin(state.time * 0.01) * 120;
+    for (const sx of [W * 0.3 + sweep, W * 0.7 - sweep]) {
+      const spot = ctx.createRadialGradient(sx, 40, 10, sx, 360, 260);
+      spot.addColorStop(0, "rgba(255,240,200,0.16)");
+      spot.addColorStop(1, "rgba(255,240,200,0)");
+      ctx.fillStyle = spot;
+      ctx.beginPath();
+      ctx.moveTo(sx, 30);
+      ctx.lineTo(sx - 160, H);
+      ctx.lineTo(sx + 160, H);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // --- Hanging paper lanterns (Tokyo flavor), parallax ---
+    const lanternOff = (camX * 0.4) % 260;
+    for (let i = -1; i < W / 260 + 2; i++) {
+      const lx = i * 260 - lanternOff + 130;
+      ctx.strokeStyle = "#2a1a2a"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(lx, 26); ctx.lineTo(lx, 70); ctx.stroke();
+      ctx.fillStyle = i % 2 ? "#ff6b6b" : "#ffd166";
+      ctx.beginPath(); ctx.ellipse(lx, 84, 14, 18, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.25)";
+      ctx.fillRect(lx - 8, 78, 16, 3);
+    }
+  }
+
+  function drawPlatforms() {
+    for (const p of level.platforms) {
+      // wooden stage structure
+      const wood = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
+      wood.addColorStop(0, "#5b3d24");
+      wood.addColorStop(1, "#38251530");
+      ctx.fillStyle = "#3a2716";
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = wood;
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      // plank seams
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.lineWidth = 1;
+      for (let px = p.x + 24; px < p.x + p.w; px += 40) {
+        ctx.beginPath(); ctx.moveTo(px, p.y); ctx.lineTo(px, p.y + p.h); ctx.stroke();
+      }
+      // gold-lit top edge (stage lighting)
+      ctx.fillStyle = "#e8b74a";
+      ctx.fillRect(p.x, p.y, p.w, 4);
+      ctx.fillStyle = "rgba(255,220,140,0.5)";
+      ctx.fillRect(p.x, p.y, p.w, 2);
+    }
+  }
+
+  function drawRopes() {
+    for (const r of (level.ropes || [])) {
+      const cx = r.x + r.w / 2;
+      // anchor point at the top (rigging beam)
+      ctx.fillStyle = "#2a2016";
+      ctx.fillRect(r.x - 10, r.y - 8, r.w + 20, 8);
+      // the rope itself, with a gentle sway
+      ctx.strokeStyle = "#c79a5b";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(cx, r.y);
+      const sway = Math.sin(state.time * 0.03) * 3;
+      for (let yy = r.y; yy <= r.y + r.h; yy += 12) {
+        const t = (yy - r.y) / r.h;
+        ctx.lineTo(cx + Math.sin(yy * 0.2 + state.time * 0.03) * 2 + sway * t, yy);
+      }
+      ctx.stroke();
+      // rope twist highlights
+      ctx.strokeStyle = "rgba(255,230,180,0.35)";
+      ctx.lineWidth = 1.5;
+      for (let yy = r.y + 4; yy < r.y + r.h; yy += 10) {
+        ctx.beginPath();
+        ctx.moveTo(cx - 2, yy);
+        ctx.lineTo(cx + 2, yy + 4);
+        ctx.stroke();
+      }
+      // knot at the bottom
+      ctx.fillStyle = "#a67c3d";
+      ctx.beginPath();
+      ctx.arc(cx + sway, r.y + r.h, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawGoal() {
+    if (!level.goal) return;
+    const gx = level.goal;
+    // themed stage door
+    ctx.fillStyle = "#8a1020";
+    ctx.fillRect(gx.x, gx.y, gx.w, gx.h);
+    ctx.fillStyle = "#e8b74a";
+    ctx.fillRect(gx.x, gx.y, gx.w, 4);
+    ctx.fillStyle = "#ffcf5c";
+    ctx.font = "bold 11px sans-serif";
+    ctx.fillText("STAGE", gx.x + 2, gx.y + gx.h / 2 - 4);
+    ctx.fillText("DOOR", gx.x + 4, gx.y + gx.h / 2 + 10);
+
+    // Floating riddle-hint sign shown when the player approaches the door,
+    // so the hint is visible during gameplay (not just on the panel).
+    if (level.riddle) {
+      const near = Math.abs((player.x + player.w / 2) - (gx.x + gx.w / 2)) < 320;
+      if (near) {
+        const bx = gx.x + gx.w / 2, by = gx.y - 54;
+        const hint = "💡 " + level.riddle.hint;
+        ctx.font = "13px sans-serif";
+        const tw = ctx.measureText(hint).width;
+        const bw = Math.min(tw + 24, 360);
+        // speech bubble
+        ctx.fillStyle = "rgba(20,14,30,0.9)";
+        ctx.strokeStyle = "#ffcf5c";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.rect(bx - bw / 2, by - 22, bw, 36);
+        ctx.fill(); ctx.stroke();
+        // wrapped hint text (single line, clipped)
+        ctx.save();
+        ctx.beginPath(); ctx.rect(bx - bw / 2 + 8, by - 22, bw - 16, 36); ctx.clip();
+        ctx.fillStyle = "#ffe9b0";
+        ctx.textAlign = "center";
+        ctx.fillText(hint, bx, by, bw - 16);
+        ctx.restore();
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#ffcf5c";
+        ctx.font = "10px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("Riddle at the door", bx, by + 28);
+        ctx.textAlign = "left";
+      }
+    }
+  }
+
+  function drawPlayer() {
+    if (player.invuln > 0 && Math.floor(state.time / 4) % 2 === 0) return; // blink
+    const px = player.x, py = player.y;
+
+    // body (spy suit)
+    ctx.fillStyle = "#20243b";
+    ctx.fillRect(px, py + 12, player.w, player.h - 12);
+    // head
+    ctx.fillStyle = "#e8c7a0";
+    ctx.fillRect(px + 4, py, player.w - 8, 12);
+    // ponytail (female spy cue)
+    ctx.fillStyle = "#5b3a1e";
+    ctx.fillRect(px + (player.facing > 0 ? -3 : player.w - 1), py + 1, 4, 14);
+    // hair top
+    ctx.fillStyle = "#5b3a1e";
+    ctx.fillRect(px + 4, py - 2, player.w - 8, 5);
+    // belt
+    ctx.fillStyle = "#ff5c8a";
+    ctx.fillRect(px, py + 22, player.w, 3);
+    // gun
+    ctx.fillStyle = "#c9ccd8";
+    if (player.facing > 0) ctx.fillRect(px + player.w, py + 16, 10, 4);
+    else ctx.fillRect(px - 10, py + 16, 10, 4);
+  }
+
+  function drawEnemies() {
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const flash = e.hitFlash > 0;
+      // body (flashes white briefly when hit)
+      ctx.fillStyle = flash ? "#ffffff" : "#7a2230";
+      ctx.fillRect(e.x, e.y, e.w, e.h);
+      ctx.fillStyle = flash ? "#ffd0d0" : "#c23b4e";
+      ctx.fillRect(e.x + 3, e.y, e.w - 6, 10);
+      // gun
+      ctx.fillStyle = "#20242f";
+      if (e.dir > 0) ctx.fillRect(e.x + e.w, e.y + 14, 9, 4);
+      else ctx.fillRect(e.x - 9, e.y + 14, 9, 4);
+
+      // Floating health bar — shown for a moment after the soldier is hit.
+      if (e.showHp > 0 && e.hp > 0) {
+        const bw = 30, bh = 5;
+        const bx = e.x + e.w / 2 - bw / 2;
+        const by = e.y - 12;
+        const frac = Math.max(0, e.hp / e.maxHp);
+        // fade out over the last 30 frames
+        ctx.globalAlpha = e.showHp < 30 ? e.showHp / 30 : 1;
+        ctx.fillStyle = "#000a";
+        ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+        ctx.fillStyle = "#3a1116";
+        ctx.fillRect(bx, by, bw, bh);
+        // color goes green -> yellow -> red as HP drops
+        ctx.fillStyle = frac > 0.5 ? "#31d17e" : frac > 0.25 ? "#ffd166" : "#ff4d5e";
+        ctx.fillRect(bx, by, bw * frac, bh);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  function drawBoss() {
+    if (!boss || !boss.alive) return;
+    ctx.fillStyle = "#3a1140";
+    ctx.fillRect(boss.x, boss.y, boss.w, boss.h);
+    ctx.fillStyle = "#8b2bb0";
+    ctx.fillRect(boss.x + 8, boss.y + 8, boss.w - 16, 30);
+    // eyes
+    ctx.fillStyle = "#ff3b6b";
+    ctx.fillRect(boss.x + 16, boss.y + 18, 8, 8);
+    ctx.fillRect(boss.x + boss.w - 24, boss.y + 18, 8, 8);
+  }
+
+  function drawBullets() {
+    ctx.fillStyle = "#ffe66b";
+    for (const b of bullets) ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = "#ff6b6b";
+    for (const b of enemyBullets) ctx.fillRect(b.x, b.y, b.w, b.h);
+  }
+
+  function drawBombs() {
+    for (const b of bombs) {
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(b.spin);
+      // round black bomb
+      ctx.fillStyle = "#1c1e28";
+      ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#3a3f52"; ctx.lineWidth = 1;
+      ctx.stroke();
+      // highlight
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
+      ctx.beginPath(); ctx.arc(-2, -2, 2, 0, Math.PI * 2); ctx.fill();
+      // fuse
+      ctx.strokeStyle = "#a67c3d"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(3, -11); ctx.stroke();
+      ctx.restore();
+      // blinking fuse spark
+      if (Math.floor(state.time / 4) % 2 === 0) {
+        ctx.fillStyle = "#ffcf5c";
+        ctx.beginPath(); ctx.arc(cx + 3, cy - 11, 2.4, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  }
+
+  function drawExplosions() {
+    for (const ex of explosions) {
+      const a = Math.max(0, ex.life / 22);
+      // outer blast
+      const g = ctx.createRadialGradient(ex.x, ex.y, 2, ex.x, ex.y, ex.r);
+      g.addColorStop(0, "rgba(255,240,180," + a + ")");
+      g.addColorStop(0.5, "rgba(255,140,60," + (a * 0.8) + ")");
+      g.addColorStop(1, "rgba(255,60,60,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r, 0, Math.PI * 2); ctx.fill();
+      // bright core
+      ctx.fillStyle = "rgba(255,255,255," + a + ")";
+      ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r * 0.3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // Draw the FULL clue picture (the answer image) filling the box centered
+  // at (cx,cy) with width w and height h, onto context g.
+  function drawClueImage(id, cx, cy, w, h, g) {
+    g = g || ctx;
+    const L = cx - w / 2, T = cy - h / 2;
+    g.save();
+
+    // If a real photo has been provided for this clue id, use it.
+    const photo = ClueImages.get(id);
+    if (photo) {
+      // cover-fit the photo into the box, then a subtle frame
+      g.save();
+      g.beginPath(); g.rect(L, T, w, h); g.clip();
+      const ar = photo.width / photo.height, boxAr = w / h;
+      let dw, dh;
+      if (ar > boxAr) { dh = h; dw = h * ar; } else { dw = w; dh = w / ar; }
+      g.drawImage(photo, cx - dw / 2, cy - dh / 2, dw, dh);
+      g.restore();
+      g.strokeStyle = "#a67c3d";
+      g.strokeRect(L, T, w, h);
+      g.restore();
+      return;
+    }
+
+    // Otherwise draw a placeholder illustration.
+    // paper background for the photo
+    g.fillStyle = "#f3ead2";
+    g.fillRect(L, T, w, h);
+    g.lineWidth = Math.max(1, w / 60);
+
+    switch (id) {
+      case "lantern": {
+        // a hanging paper lantern
+        // string + top cap
+        g.strokeStyle = "#3a2a18"; g.lineWidth = Math.max(1, w / 80);
+        g.beginPath(); g.moveTo(cx, T + h * 0.05); g.lineTo(cx, T + h * 0.16); g.stroke();
+        g.fillStyle = "#2a1a10";
+        g.fillRect(cx - w * 0.10, T + h * 0.14, w * 0.20, h * 0.05);
+        // lantern body (glowing red-orange)
+        const lg = g.createLinearGradient ? g.createLinearGradient(cx, T + h * 0.2, cx, T + h * 0.8) : null;
+        if (lg) { lg.addColorStop(0, "#ff8a5c"); lg.addColorStop(0.5, "#e23b3b"); lg.addColorStop(1, "#a11f2a"); g.fillStyle = lg; }
+        else g.fillStyle = "#e23b3b";
+        g.beginPath();
+        g.ellipse(cx, T + h * 0.5, w * 0.26, h * 0.34, 0, 0, Math.PI * 2);
+        g.fill();
+        // ribs
+        g.strokeStyle = "rgba(90,10,10,0.6)"; g.lineWidth = Math.max(1, w / 120);
+        for (let i = -2; i <= 2; i++) {
+          g.beginPath();
+          g.ellipse(cx + i * w * 0.09, T + h * 0.5, w * 0.05, h * 0.34, 0, 0, Math.PI * 2);
+          g.stroke();
+        }
+        // bottom cap + tassel
+        g.fillStyle = "#2a1a10";
+        g.fillRect(cx - w * 0.08, T + h * 0.82, w * 0.16, h * 0.05);
+        g.strokeStyle = "#c9a227"; g.lineWidth = Math.max(1, w / 90);
+        g.beginPath(); g.moveTo(cx, T + h * 0.87); g.lineTo(cx, T + h * 0.95); g.stroke();
+        break;
+      }
+      case "mask": {
+        // a theatrical face mask
+        g.fillStyle = "#e9e2d0";
+        g.beginPath();
+        g.ellipse(cx, cy, w * 0.26, h * 0.36, 0, 0, Math.PI * 2);
+        g.fill();
+        g.strokeStyle = "#8a6d10"; g.lineWidth = Math.max(1.5, w / 70);
+        g.stroke();
+        // eye holes (almond)
+        g.fillStyle = "#20242f";
+        g.beginPath(); g.ellipse(cx - w * 0.10, cy - h * 0.08, w * 0.06, h * 0.05, 0.2, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.ellipse(cx + w * 0.10, cy - h * 0.08, w * 0.06, h * 0.05, -0.2, 0, Math.PI * 2); g.fill();
+        // curved mouth
+        g.strokeStyle = "#a11f2a"; g.lineWidth = Math.max(1.5, w / 70);
+        g.beginPath(); g.arc(cx, cy + h * 0.02, w * 0.12, 0.2 * Math.PI, 0.8 * Math.PI); g.stroke();
+        // brow/decoration
+        g.strokeStyle = "#8a6d10";
+        g.beginPath(); g.moveTo(cx - w * 0.16, cy - h * 0.16); g.quadraticCurveTo(cx, cy - h * 0.26, cx + w * 0.16, cy - h * 0.16); g.stroke();
+        break;
+      }
+      case "key": {
+        // an old-fashioned key lying horizontally
+        g.fillStyle = "#d8b23a";
+        // bow (round handle) on the left
+        g.beginPath(); g.arc(cx - w * 0.22, cy, h * 0.18, 0, Math.PI * 2); g.fill();
+        g.fillStyle = "#f3ead2";
+        g.beginPath(); g.arc(cx - w * 0.22, cy, h * 0.08, 0, Math.PI * 2); g.fill(); // hole
+        // shaft
+        g.fillStyle = "#d8b23a";
+        g.fillRect(cx - w * 0.10, cy - h * 0.05, w * 0.30, h * 0.10);
+        // bit / teeth on the right
+        g.fillRect(cx + w * 0.12, cy, w * 0.04, h * 0.16);
+        g.fillRect(cx + w * 0.17, cy, w * 0.03, h * 0.12);
+        // outline
+        g.strokeStyle = "#8a6d10"; g.lineWidth = Math.max(1, w / 100);
+        g.strokeRect(cx - w * 0.10, cy - h * 0.05, w * 0.30, h * 0.10);
+        break;
+      }
+      default: {
+        g.fillStyle = "#888";
+        g.fillRect(L + 4, T + 4, w - 8, h - 8);
+      }
+    }
+    // subtle photo border
+    g.strokeStyle = "#a67c3d";
+    g.strokeRect(L, T, w, h);
+    g.restore();
+  }
+
+  // Draw a single torn PIECE (vertical strip `idx` of `n`) of the clue image,
+  // positioned in a box at (cx,cy) of size (w,h). The strip is clipped so it
+  // shows only its portion of the full picture — pieces tape back together.
+  function drawCluePieceStrip(id, idx, n, cx, cy, w, h, g, taped) {
+    g = g || ctx;
+    const stripW = w / n;
+    const stripL = cx - w / 2 + idx * stripW;
+    g.save();
+    // torn-paper backing for this piece
+    g.beginPath();
+    g.rect(stripL, cy - h / 2, stripW, h);
+    g.clip();
+    // draw the FULL image in the box; clipping leaves only this strip visible
+    drawClueImage(id, cx, cy, w, h, g);
+    g.restore();
+    // torn/taped edges
+    g.strokeStyle = taped ? "#d8c8a0" : "#7a6a3a";
+    g.lineWidth = 1;
+    g.strokeRect(stripL, cy - h / 2, stripW, h);
+    if (taped) {
+      // strips of "tape" over the seams
+      g.fillStyle = "rgba(230,230,210,0.5)";
+      if (idx > 0) g.fillRect(stripL - 6, cy - 8, 12, 16);
+    }
+  }
+
+  // Backwards-compatible small icon used in the HUD / floating pickup:
+  // draws piece `idx` of `n` of the level's clue image in a small box.
+  function drawCluePieceIcon(idx, n, cx, cy, s, g) {
+    drawCluePieceStrip(level.clueImage, idx, n, cx, cy, s, s, g, false);
+  }
+
+  // Floating clue pickups dropped by guards.
+  function drawClues() {
+    for (const c of clues) {
+      if (c.collected) continue;
+      // glowing scroll/note backing
+      ctx.save();
+      const pulse = 0.5 + 0.5 * Math.sin(state.time * 0.1);
+      ctx.globalAlpha = 0.25 + 0.25 * pulse;
+      ctx.fillStyle = "#ffd166";
+      ctx.beginPath(); ctx.arc(c.x, c.y, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      // torn piece of the clue photo on a note card
+      const n = totalClues();
+      drawCluePieceStrip(level.clueImage, c.id, n, c.x, c.y, 26, 26, ctx, false);
+      ctx.restore();
+    }
+  }
+
+  function drawHUD() {
+    // health bar
+    ctx.fillStyle = "#000a";
+    ctx.fillRect(16, 16, 204, 24);
+    ctx.fillStyle = "#333a58";
+    ctx.fillRect(18, 18, 200, 20);
+    ctx.fillStyle = "#31d17e";
+    ctx.fillRect(18, 18, 200 * (player.hp / player.maxHp), 20);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 13px sans-serif";
+    ctx.fillText("HP", 24, 33);
+
+    // level name
+    ctx.fillStyle = "#c3c9dc";
+    ctx.font = "14px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(`Level ${state.levelIndex + 1}: ${level.name}`, W - 16, 30);
+    ctx.textAlign = "left";
+
+    // clue counter (with mini collected image pieces)
+    if (totalClues() > 0) {
+      const cy = 58;
+      const n = totalClues();
+      ctx.fillStyle = "#000a";
+      ctx.fillRect(16, cy - 16, 96 + n * 20, 30);
+      ctx.fillStyle = "#ffd166";
+      ctx.font = "bold 13px sans-serif";
+      ctx.fillText(`Clues ${collectedClues.length}/${n}`, 24, cy + 3);
+      // draw slots for each piece; filled ones show that torn strip
+      for (let i = 0; i < n; i++) {
+        const sx = 100 + i * 20, sy = cy - 1;
+        ctx.strokeStyle = "#7a6a3a"; ctx.lineWidth = 1;
+        ctx.strokeRect(sx - 8, sy - 8, 16, 16);
+        if (collectedClues.includes(i)) {
+          drawCluePieceStrip(level.clueImage, i, n, sx, sy, 16, 16, ctx, false);
+        }
+      }
+    }
+
+    // gate prompt: reached the door but missing clues
+    if (state.gatePrompt > 0) {
+      ctx.globalAlpha = Math.min(1, state.gatePrompt / 30);
+      ctx.fillStyle = "#000b";
+      ctx.fillRect(W / 2 - 210, H - 70, 420, 40);
+      ctx.fillStyle = "#ffd166";
+      ctx.font = "bold 15px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("The stage door is locked — collect all clue notes first!", W / 2, H - 45);
+      ctx.textAlign = "left";
+      ctx.globalAlpha = 1;
+    }
+
+    // boss health
+    if (boss && boss.alive) {
+      ctx.fillStyle = "#000a";
+      ctx.fillRect(W / 2 - 202, 16, 404, 22);
+      ctx.fillStyle = "#3a1140";
+      ctx.fillRect(W / 2 - 200, 18, 400, 18);
+      ctx.fillStyle = "#c23bff";
+      ctx.fillRect(W / 2 - 200, 18, 400 * (boss.hp / boss.maxHp), 18);
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText("THE IMPRESARIO", W / 2, 32);
+      ctx.textAlign = "left";
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Main loop
+  // ---------------------------------------------------------------------
+  function loop() {
+    state.time++;
+    if (state.mode === "play") {
+      if (state.gatePrompt > 0) state.gatePrompt--;
+      updatePlayer();
+      updateEnemies();
+      updateBoss();
+      updateBullets();
+      updateBombs();
+      updateExplosions();
+      updateClues();
+      updateCamera();
+    }
+    if (level) draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------------------------------------------------------------------
+  // Boot
+  // ---------------------------------------------------------------------
+  function startGame() {
+    levels = makeLevels();
+    state.levelIndex = 0;
+    loadLevel(0);
+    state.mode = "play";
+    hideMessage();
+    Sfx.unlock();      // resume AudioContext on this user gesture
+    Sfx.startMusic();
+  }
+
+  // Initial menu
+  loadLevel(0);              // load so we can render behind the menu
+  state.mode = "menu";
+  // Try to load real clue photos (fall back to drawn placeholders if absent).
+  ClueImages.preload(["lantern", "mask", "key"]);
+  showMessage(
+    "Immersive Theater Tokyo",
+    "Deep inside Immersive Theater Tokyo — a sprawling interactive theater — a secret is hidden. " +
+    "You are the Nightingale, an elite spy. Move through the grand hall, the backstage rigging, and " +
+    "the lighting catwalk. Take down the guards — each carries a torn piece of a photograph. Collect " +
+    "every piece, tape the photo back together at each locked door to crack its riddle, then face " +
+    "The Impresario for the final act. Climb the ropes and lob bombs to clear your path.",
+    "Raise the Curtain",
+    startGame
+  );
+
+  loop();
+})();

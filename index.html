@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Immersive Theater Tokyo</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="game-wrap">
+    <canvas id="game" width="960" height="540"></canvas>
+
+    <button id="mute-btn" aria-label="Toggle sound">🔊</button>
+
+    <!-- On-screen touch controls (mobile) -->
+    <div id="touch-controls" class="hidden">
+      <div class="pad pad-left">
+        <button class="tbtn" data-key="left"  aria-label="Move left">◀</button>
+        <button class="tbtn" data-key="right" aria-label="Move right">▶</button>
+      </div>
+      <div class="pad pad-right">
+        <button class="tbtn tbtn-bomb"  data-key="bomb"  aria-label="Throw bomb">💣</button>
+        <button class="tbtn tbtn-shoot" data-key="shoot" aria-label="Shoot">🔫</button>
+        <button class="tbtn tbtn-jump"  data-key="jump"  aria-label="Jump">⤒</button>
+      </div>
+    </div>
+
+    <!-- Riddle / puzzle gate overlay -->
+    <div id="riddle-overlay" class="overlay hidden">
+      <div class="panel">
+        <h2 id="riddle-title">Security Gate</h2>
+        <p id="riddle-text"></p>
+        <p id="clue-caption" class="clue-caption">Piece the clues together:</p>
+        <canvas id="clue-canvas" width="440" height="90"></canvas>
+        <input id="riddle-input" type="text" autocomplete="off" placeholder="Type your answer..." />
+        <div class="row">
+          <button id="riddle-submit">Unlock</button>
+          <span id="riddle-hint" class="hint"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Start / message overlay -->
+    <div id="msg-overlay" class="overlay">
+      <div class="panel">
+        <h1 id="msg-title">Immersive Theater Tokyo</h1>
+        <p id="msg-body"></p>
+        <button id="msg-button">Start Mission</button>
+        <p class="controls-help">
+          Move: <b>A / D</b> or <b>&larr; / &rarr;</b> &nbsp;|&nbsp;
+          Jump: <b>W</b> / <b>&uarr;</b> / <b>Space</b> &nbsp;|&nbsp;
+          Climb ropes: <b>W / S</b> &nbsp;|&nbsp;
+          Shoot: <b>J / F</b> &nbsp;|&nbsp;
+          Bomb: <b>K / B</b>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

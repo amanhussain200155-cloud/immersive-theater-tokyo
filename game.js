@@ -84,9 +84,11 @@
     switch (action) {
       case "left":  keys["a"] = down; break;
       case "right": keys["d"] = down; break;
-      case "up":    keys["w"] = down; if (down) pressed["w"] = true; break;   // climb up / (also jump-buffer)
-      case "down":  keys["s"] = down; break;                                   // climb down
       case "shoot": keys["j"] = down; break;
+      case "web":
+        keys["l"] = down;
+        if (down) pressed["l"] = true; // fire the one-shot web throw
+        break;
       case "bomb":
         keys["k"] = down;
         if (down) pressed["k"] = true; // fire the one-shot bomb throw
@@ -329,6 +331,7 @@
   const JUMP  = () => consume("w") || consume("ArrowUp") || consume("space");
   const SHOOT = () => keys["j"] || keys["f"];
   const BOMB  = () => consume("k") || consume("b");
+  const WEB   = () => consume("l") || consume("g");
 
   // ---------------------------------------------------------------------
   // Geometry helpers
@@ -355,20 +358,20 @@
     x: 60, y: 300, w: 22, h: 38,
     vx: 0, vy: 0,
     onGround: false,
-    onRope: false,
     facing: 1,
     hp: 100, maxHp: 100,
     shootCooldown: 0,
     bombCooldown: 0,
+    webCooldown: 0,
     invuln: 0,
     coyote: 0,       // frames since last grounded (for coyote-time jumps)
     jumpBuffer: 0,   // frames since jump was pressed (for buffered jumps)
     reset(spawn) {
       this.x = spawn.x; this.y = spawn.y;
       this.vx = 0; this.vy = 0;
-      this.onGround = false; this.onRope = false;
+      this.onGround = false;
       this.hp = this.maxHp; this.invuln = 0; this.shootCooldown = 0;
-      this.bombCooldown = 0;
+      this.bombCooldown = 0; this.webCooldown = 0;
       this.coyote = 0; this.jumpBuffer = 0;
       this.facing = 1;
     }
@@ -378,6 +381,10 @@
   const enemyBullets = []; // hostile bullets
   const bombs = [];        // thrown bombs (arc + gravity)
   const explosions = [];   // active explosion effects (AoE + visual)
+
+  // Web/grapple: when active, a line is drawn from the spy to a grabbed
+  // target which is reeled toward the spy. { target, life } or null.
+  let web = null;
 
   // ---------------------------------------------------------------------
   // Levels
@@ -400,11 +407,6 @@
           { x: 1200, y: 440, w: 200, h: 100 },
           { x: 1500, y: 380, w: 180, h: 160 },
           { x: 1780, y: 430, w: 420, h: 110 },
-          // balcony at the top of the rope (rope descends from its right end)
-          { x: 1150, y: 300, w: 150, h: 16 },
-        ],
-        ropes: [
-          { x: 1290, y: 300, w: 12, h: 150 },
         ],
         // One picture torn into pieces — one piece per guard. Collect all,
         // then tape them together at the door to read the answer.
@@ -436,11 +438,6 @@
           { x: 1440, y: 400, w: 200, h: 140 },
           { x: 1740, y: 430, w: 200, h: 110 },
           { x: 2040, y: 400, w: 560, h: 140 },
-          // balcony at the top of the rope
-          { x: 720, y: 270, w: 150, h: 16 },
-        ],
-        ropes: [
-          { x: 860, y: 270, w: 12, h: 150 },
         ],
         clueImage: "mask",   // a theatrical mask — the answer to L2's riddle
         enemies: [
@@ -473,11 +470,6 @@
           { x: 1560, y: 430, w: 160, h: 110 },
           { x: 1820, y: 400, w: 200, h: 140 },
           { x: 2120, y: 360, w: 280, h: 180 },
-          // balcony at the top of the rope
-          { x: 1160, y: 300, w: 150, h: 16 },
-        ],
-        ropes: [
-          { x: 1300, y: 300, w: 12, h: 130 },
         ],
         clueImage: "key",   // a key — the answer to L3's riddle
         enemies: [
@@ -506,8 +498,6 @@
           { x: 720, y: 360, w: 120, h: 20 },
           { x: 420, y: 280, w: 120, h: 20 },
         ],
-        ladders: [],
-        ropes: [],
         enemies: [],
         goal: null,
         isBoss: true
@@ -533,6 +523,8 @@
       hp: 30, maxHp: 30,
       hitFlash: 0,     // frames of white flash after a hit
       showHp: 0,       // frames to keep the health bar visible after a hit
+      stun: 0,         // frames stunned (can't move/shoot) after being webbed
+      webbed: false,   // currently being reeled in by the web
       clue: (typeof def.clue === "number") ? def.clue : -1, // clue piece this guard carries
       shootTimer: 60 + Math.random() * 90,
       alive: true,
@@ -552,6 +544,7 @@
     enemyBullets.length = 0;
     bombs.length = 0;
     explosions.length = 0;
+    web = null;
     clues = [];
     collectedClues = [];
     camX = 0;
@@ -649,51 +642,10 @@
     }
   }
 
-  function overlapsAnyRope(entity, ropes) {
-    for (const l of ropes) if (rectsOverlap(entity, l)) return l;
-    return null;
-  }
-
   // ---------------------------------------------------------------------
   // Update: player
   // ---------------------------------------------------------------------
   function updatePlayer() {
-    const ropes = level.ropes || [];
-    const rope = overlapsAnyRope(player, ropes);
-
-    // Rope logic: grabbing on up/down attaches you; once attached you hang
-    // in place (no gravity) even when idle, until you press left/right to
-    // dismount or jump off. This makes climbing to the balcony reliable.
-    if (!rope) {
-      player.onRope = false;
-    } else {
-      if (UP() || DOWN()) player.onRope = true;           // grab / keep climbing
-      if (player.onRope && (LEFT() || RIGHT())) player.onRope = false; // step off sideways
-    }
-    if (player.onRope) {
-      player.vy = 0;
-      player.x += ((rope.x + rope.w / 2) - (player.x + player.w / 2)) * 0.4; // hug the rope
-      if (UP()) player.y -= CLIMB_SPEED;
-      if (DOWN()) player.y += CLIMB_SPEED;
-
-      // Climb-off-the-top: while climbing up, if the player's head reaches a
-      // platform (the balcony) that they horizontally overlap, lift them onto
-      // its top surface and let go — so the balcony doesn't block from below.
-      if (UP()) {
-        const head = player.y;
-        for (const p of level.platforms) {
-          if (p.h > 24) continue; // only thin balcony/ledge platforms
-          const xOverlap = (player.x + player.w > p.x + 2) && (player.x < p.x + p.w - 2);
-          if (xOverlap && head <= p.y + p.h + 6 && head >= p.y - player.h - 4) {
-            player.y = p.y - player.h;
-            player.onRope = false;
-            player.onGround = true;
-            break;
-          }
-        }
-      }
-    }
-
     // Horizontal movement
     if (LEFT())  { player.vx = -MOVE_SPEED; player.facing = -1; }
     else if (RIGHT()) { player.vx = MOVE_SPEED; player.facing = 1; }
@@ -704,21 +656,18 @@
     if (JUMP()) player.jumpBuffer = JUMP_BUFFER;
     if (player.jumpBuffer > 0) player.jumpBuffer--;
 
-    const canJump = player.onGround || player.onRope || player.coyote > 0;
+    const canJump = player.onGround || player.coyote > 0;
     if (player.jumpBuffer > 0 && canJump) {
       player.vy = JUMP_VELOCITY;
       player.onGround = false;
-      player.onRope = false;
       player.coyote = 0;
       player.jumpBuffer = 0;
       Sfx.jump();
     }
 
-    // Gravity (skip while climbing)
-    if (!player.onRope) {
-      player.vy += GRAVITY;
-      if (player.vy > MAX_FALL) player.vy = MAX_FALL;
-    }
+    // Gravity
+    player.vy += GRAVITY;
+    if (player.vy > MAX_FALL) player.vy = MAX_FALL;
 
     collidePlatforms(player, level.platforms);
 
@@ -752,6 +701,14 @@
       player.bombCooldown = 45;
     }
 
+    // Web/grapple — throw toward the facing direction, grab the nearest
+    // guard/boss in range and reel them in.
+    if (player.webCooldown > 0) player.webCooldown--;
+    if (WEB() && player.webCooldown === 0) {
+      throwWeb();
+      player.webCooldown = 40;
+    }
+
     if (player.invuln > 0) player.invuln--;
 
     // Reach goal -> riddle gate (only once all clue pieces are collected).
@@ -777,6 +734,82 @@
       spin: 0,
     });
     Sfx.jump(); // a light "toss" whoosh (reuse)
+  }
+
+  // ---------------------------------------------------------------------
+  // Web / grapple: throw toward the facing direction, grab the nearest
+  // guard (or the boss) within range and reel them toward the spy, dealing
+  // light damage + a brief stun.
+  // ---------------------------------------------------------------------
+  const WEB_RANGE = 340;
+  const WEB_DAMAGE = 14;
+  const WEB_STUN = 70;      // frames the target is stunned after being pulled
+
+  function throwWeb() {
+    Sfx.shoot(); // a quick "thwip"
+    const px = player.x + player.w / 2;
+    const py = player.y + player.h / 2;
+    let best = null, bestDist = WEB_RANGE;
+
+    // Consider guards in front of the spy (in the facing direction).
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const ex = e.x + e.w / 2;
+      const dx = ex - px;
+      if (Math.sign(dx) !== player.facing && Math.abs(dx) > 8) continue; // must be ahead
+      const dist = Math.hypot(ex - px, (e.y + e.h / 2) - py);
+      if (dist < bestDist) { bestDist = dist; best = e; }
+    }
+    // The boss can also be grabbed.
+    if (boss && boss.alive) {
+      const bx = boss.x + boss.w / 2;
+      const dx = bx - px;
+      if (Math.sign(dx) === player.facing || Math.abs(dx) <= 8) {
+        const dist = Math.hypot(bx - px, (boss.y + boss.h / 2) - py);
+        if (dist < bestDist) { bestDist = dist; best = boss; }
+      }
+    }
+
+    if (best) {
+      web = { target: best, life: 26, damaged: false };
+      best.webbed = true;
+    } else {
+      // a short "miss" web that just flicks out and retracts
+      web = { target: null, life: 10, damaged: false,
+              endX: px + player.facing * WEB_RANGE, endY: py };
+    }
+  }
+
+  function updateWeb() {
+    if (!web) return;
+    web.life--;
+    const t = web.target;
+    if (t && t.alive) {
+      // Reel the target toward the spy.
+      const px = player.x + player.w / 2;
+      const tx = t.x + t.w / 2;
+      const pull = (px - tx) * 0.28;      // ease the enemy toward the spy
+      t.x += pull;
+      t.stun = WEB_STUN;                  // keep them stunned while/after reeling
+      t.showHp = 120;
+      if (!web.damaged) {
+        web.damaged = true;
+        t.hitFlash = 6;
+        if (t === boss) {
+          boss.hp -= WEB_DAMAGE;
+          Sfx.bossHit();
+          if (boss.hp <= 0) { boss.hp = 0; boss.alive = false; onBossDefeated(); }
+        } else {
+          t.hp -= WEB_DAMAGE;
+          Sfx.hit();
+          if (t.hp <= 0) { t.alive = false; Sfx.enemyDown(); dropClue(t); }
+        }
+      }
+    }
+    if (web.life <= 0) {
+      if (t) t.webbed = false;
+      web = null;
+    }
   }
 
   const EXPLOSION_RADIUS = 78;
@@ -838,6 +871,13 @@
 
       if (e.hitFlash > 0) e.hitFlash--;
       if (e.showHp > 0) e.showHp--;
+
+      // While stunned (just webbed), the guard can't patrol or shoot.
+      if (e.stun > 0) {
+        e.stun--;
+        if (rectsOverlap(player, e)) damagePlayer(18);
+        continue;
+      }
 
       // Patrol
       e.x += e.vx * e.dir;
@@ -1160,7 +1200,6 @@
     ctx.translate(-camX, 0);
 
     drawPlatforms();
-    drawRopes();
     drawGoal();
     drawClues();
     drawEnemies();
@@ -1168,6 +1207,7 @@
     drawBullets();
     drawBombs();
     drawExplosions();
+    drawWeb();
     drawPlayer();
 
     ctx.restore();
@@ -1299,40 +1339,6 @@
       ctx.fillRect(p.x, p.y, p.w, 4);
       ctx.fillStyle = "rgba(255,220,140,0.5)";
       ctx.fillRect(p.x, p.y, p.w, 2);
-    }
-  }
-
-  function drawRopes() {
-    for (const r of (level.ropes || [])) {
-      const cx = r.x + r.w / 2;
-      // anchor point at the top (rigging beam)
-      ctx.fillStyle = "#2a2016";
-      ctx.fillRect(r.x - 10, r.y - 8, r.w + 20, 8);
-      // the rope itself, with a gentle sway
-      ctx.strokeStyle = "#c79a5b";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(cx, r.y);
-      const sway = Math.sin(state.time * 0.03) * 3;
-      for (let yy = r.y; yy <= r.y + r.h; yy += 12) {
-        const t = (yy - r.y) / r.h;
-        ctx.lineTo(cx + Math.sin(yy * 0.2 + state.time * 0.03) * 2 + sway * t, yy);
-      }
-      ctx.stroke();
-      // rope twist highlights
-      ctx.strokeStyle = "rgba(255,230,180,0.35)";
-      ctx.lineWidth = 1.5;
-      for (let yy = r.y + 4; yy < r.y + r.h; yy += 10) {
-        ctx.beginPath();
-        ctx.moveTo(cx - 2, yy);
-        ctx.lineTo(cx + 2, yy + 4);
-        ctx.stroke();
-      }
-      // knot at the bottom
-      ctx.fillStyle = "#a67c3d";
-      ctx.beginPath();
-      ctx.arc(cx + sway, r.y + r.h, 5, 0, Math.PI * 2);
-      ctx.fill();
     }
   }
 
@@ -1501,6 +1507,36 @@
       ctx.fillStyle = "rgba(255,255,255," + a + ")";
       ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r * 0.3, 0, Math.PI * 2); ctx.fill();
     }
+  }
+
+  // Draw the web/grapple line from the spy's hand to the grabbed target.
+  function drawWeb() {
+    if (!web) return;
+    const hx = player.x + player.w / 2 + player.facing * 8;
+    const hy = player.y + 14;
+    let ex, ey;
+    if (web.target && web.target.alive) {
+      ex = web.target.x + web.target.w / 2;
+      ey = web.target.y + web.target.h / 2;
+    } else {
+      ex = web.endX; ey = web.endY;
+    }
+    // zig-zag web strand
+    ctx.strokeStyle = "rgba(230,240,255,0.9)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    const segs = 6;
+    for (let i = 1; i <= segs; i++) {
+      const t = i / segs;
+      const x = hx + (ex - hx) * t;
+      const y = hy + (ey - hy) * t + (i < segs ? (i % 2 ? 3 : -3) : 0);
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // sticky tip
+    ctx.fillStyle = "#eef4ff";
+    ctx.beginPath(); ctx.arc(ex, ey, 4, 0, Math.PI * 2); ctx.fill();
   }
 
   // Draw the FULL clue picture (the answer image) filling the box centered
@@ -1742,6 +1778,7 @@
       updateBullets();
       updateBombs();
       updateExplosions();
+      updateWeb();
       updateClues();
       updateCamera();
     }
@@ -1775,7 +1812,7 @@
     "You are the Nightingale, an elite spy. Move through the grand hall, the backstage rigging, and " +
     "the lighting catwalk. Take down the guards — each carries a torn piece of a photograph. Collect " +
     "every piece, tape the photo back together at each locked door to crack its riddle, then face " +
-    "The Impresario for the final act. Climb the ropes and lob bombs to clear your path.",
+    "The Impresario for the final act. Lob bombs and fire your web to yank guards in close.",
     "Raise the Curtain",
     startGame
   );

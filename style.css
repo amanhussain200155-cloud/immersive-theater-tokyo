@@ -119,20 +119,7 @@ b { color: #e8ecf5; }
   gap: 10px;
   pointer-events: auto;
 }
-/* Left pad = a compact d-pad grid (up on top row; left/down/right below). */
-.pad-left {
-  display: grid;
-  grid-template-columns: repeat(3, auto);
-  grid-template-areas:
-    ".    up    ."
-    "left down right";
-  gap: 6px;
-  align-items: end;
-}
-.pad-left [data-key="up"]    { grid-area: up; }
-.pad-left [data-key="left"]  { grid-area: left; }
-.pad-left [data-key="down"]  { grid-area: down; }
-.pad-left [data-key="right"] { grid-area: right; }
+.pad-left  { align-items: flex-end; }
 .pad-right { align-items: flex-end; }
 
 .tbtn {
@@ -160,6 +147,7 @@ b { color: #e8ecf5; }
 .tbtn-jump  { width: 60px; height: 60px; font-size: 26px; }
 .tbtn-shoot { background: rgba(120, 30, 40, 0.55); }
 .tbtn-bomb  { background: rgba(60, 50, 20, 0.55); }
+.tbtn-web   { background: rgba(30, 60, 80, 0.55); }
 
 /* Slightly larger touch targets on bigger screens */
 @media (min-width: 700px) and (pointer: coarse) {

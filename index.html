@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Immersive Theater Tokyo</title>
-  <link rel="stylesheet" href="style.css?v=3" />
+  <link rel="stylesheet" href="style.css?v=4" />
 </head>
 <body>
   <div id="game-wrap">
@@ -19,12 +19,11 @@
     <!-- On-screen touch controls (mobile) -->
     <div id="touch-controls" class="hidden">
       <div class="pad pad-left">
-        <button class="tbtn" data-key="up"    aria-label="Up / climb">▲</button>
         <button class="tbtn" data-key="left"  aria-label="Move left">◀</button>
-        <button class="tbtn" data-key="down"  aria-label="Down / climb">▼</button>
         <button class="tbtn" data-key="right" aria-label="Move right">▶</button>
       </div>
       <div class="pad pad-right">
+        <button class="tbtn tbtn-web"   data-key="web"   aria-label="Throw web">🕸️</button>
         <button class="tbtn tbtn-shoot" data-key="shoot" aria-label="Shoot">🔫</button>
         <button class="tbtn tbtn-bomb"  data-key="bomb"  aria-label="Throw bomb">💣</button>
         <button class="tbtn tbtn-jump"  data-key="jump"  aria-label="Jump">⤒</button>
@@ -55,9 +54,9 @@
         <p class="controls-help">
           Move: <b>A / D</b> or <b>&larr; / &rarr;</b> &nbsp;|&nbsp;
           Jump: <b>W</b> / <b>&uarr;</b> / <b>Space</b> &nbsp;|&nbsp;
-          Climb ropes: <b>W / S</b> &nbsp;|&nbsp;
           Shoot: <b>J / F</b> &nbsp;|&nbsp;
-          Bomb: <b>K / B</b>
+          Bomb: <b>K / B</b> &nbsp;|&nbsp;
+          Web-pull: <b>L / G</b>
         </p>
       </div>
     </div>
@@ -70,6 +69,6 @@
     <p>Immersive Theater Tokyo plays best in landscape. Turn your device sideways to start.</p>
   </div>
 
-  <script src="game.js?v=3"></script>
+  <script src="game.js?v=4"></script>
 </body>
 </html>

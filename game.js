@@ -64,6 +64,10 @@
   const keys = {};
   const pressed = {}; // one-shot presses (consumed on read)
 
+  // Analog joystick vector (on-screen), range ~[-1,1] each axis; active while
+  // the player is dragging the stick. Drives movement AND aim direction.
+  const stick = { x: 0, y: 0, active: false };
+
   window.addEventListener("keydown", (e) => {
     // prevent page scroll on arrows/space while playing
     if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) {
@@ -135,6 +139,64 @@
         (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) ||
         (window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
     if (isTouch) revealTouch();
+  }
+
+  // ---- On-screen joystick (move + aim) ----
+  const joystickEl = document.getElementById("joystick");
+  const knobEl = document.getElementById("joystick-knob");
+  if (joystickEl && knobEl) {
+    let jsPointer = null;
+    const maxR = 40; // knob travel radius in px
+
+    function setStickFromEvent(clientX, clientY) {
+      const r = joystickEl.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      let dx = clientX - cx;
+      let dy = clientY - cy;
+      const dist = Math.hypot(dx, dy) || 1;
+      const clamped = Math.min(dist, maxR);
+      const nx = (dx / dist) * clamped;
+      const ny = (dy / dist) * clamped;
+      knobEl.style.transform = "translate(" + nx + "px," + ny + "px)";
+      stick.x = nx / maxR;   // -1..1
+      stick.y = ny / maxR;   // -1..1 (down is +y, matching screen/aim)
+      stick.active = true;
+    }
+    function releaseStick() {
+      stick.x = 0; stick.y = 0; stick.active = false;
+      knobEl.style.transform = "translate(0,0)";
+      jsPointer = null;
+    }
+
+    // Pointer events cover both touch and mouse.
+    joystickEl.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      jsPointer = e.pointerId;
+      if (joystickEl.setPointerCapture) { try { joystickEl.setPointerCapture(e.pointerId); } catch (_) {} }
+      setStickFromEvent(e.clientX, e.clientY);
+    });
+    joystickEl.addEventListener("pointermove", (e) => {
+      if (jsPointer === null || e.pointerId !== jsPointer) return;
+      e.preventDefault();
+      setStickFromEvent(e.clientX, e.clientY);
+    });
+    const endJs = (e) => { if (jsPointer !== null && e.pointerId === jsPointer) releaseStick(); };
+    joystickEl.addEventListener("pointerup", endJs);
+    joystickEl.addEventListener("pointercancel", endJs);
+    joystickEl.addEventListener("lostpointercapture", releaseStick);
+
+    // Touch fallback (older browsers without pointer events).
+    joystickEl.addEventListener("touchstart", (e) => {
+      e.preventDefault(); const t = e.changedTouches[0]; jsPointer = "touch";
+      setStickFromEvent(t.clientX, t.clientY);
+    }, { passive: false });
+    joystickEl.addEventListener("touchmove", (e) => {
+      e.preventDefault(); const t = e.changedTouches[0];
+      setStickFromEvent(t.clientX, t.clientY);
+    }, { passive: false });
+    joystickEl.addEventListener("touchend", (e) => { e.preventDefault(); releaseStick(); }, { passive: false });
+    joystickEl.addEventListener("touchcancel", releaseStick);
   }
 
   // ---- Mute toggle (button + 'M' key) ----
@@ -217,16 +279,36 @@
       src.start(t);
     }
 
-    // A gentle, Japanese-pentatonic-flavored looping melody for the theater.
-    const SCALE = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5]; // C D E G A C
+    // A moody spy-lounge loop: 4-chord progression (Am–F–C–G) with a
+    // walking bass, a soft arpeggio, and occasional melody notes.
+    // Note frequencies:
+    const N = {
+      A2:110.00, C3:130.81, E3:164.81, F2:87.31, G2:98.00,
+      A3:220.00, C4:261.63, E4:329.63, F3:174.61, G3:196.00,
+      A4:440.00, C5:523.25, E5:659.25, F4:349.23, G4:392.00,
+    };
+    // Each chord: [bass, [arpeggio notes...]]
+    const PROG = [
+      [N.A2, [N.A3, N.C4, N.E4, N.C4]],  // Am
+      [N.F2, [N.F3, N.A3, N.C4, N.A3]],  // F
+      [N.C3, [N.C4, N.E4, N.G4, N.E4]],  // C
+      [N.G2, [N.G3, N.C4, N.E4, N.C4]],  // G
+    ];
+    const MELODY = [N.E5, 0, N.C5, N.A4, 0, N.G4, N.A4, 0,
+                    N.C5, 0, N.E5, N.G4, 0, N.E4, 0, 0];
     function musicStep() {
       if (muted || !ensure()) return;
-      // bass pulse
-      tone(SCALE[step % 3] / 4, 0.5, "triangle", 0.12);
-      // melody note (skips around the scale)
-      const idx = (step * 3 + (step % 2 ? 2 : 0)) % SCALE.length;
-      tone(SCALE[idx], 0.32, "sine", 0.16);
-      if (step % 4 === 0) noise(0.05, 0.05, 4000); // soft hat
+      const chord = PROG[Math.floor(step / 4) % PROG.length];
+      const beat = step % 4;
+      // bass on every beat (with a soft octave lift mid-bar)
+      tone(chord[0] * (beat === 2 ? 2 : 1), 0.42, "triangle", 0.14);
+      // arpeggio note each beat
+      tone(chord[1][beat], 0.28, "sine", 0.10);
+      // melody every other beat
+      const mel = MELODY[step % MELODY.length];
+      if (mel) tone(mel, 0.34, "triangle", 0.09);
+      // soft brush on the off-beats
+      if (beat === 1 || beat === 3) noise(0.04, 0.03, 5000);
       step++;
     }
 
@@ -272,7 +354,7 @@
       startMusic() {
         if (!ensure() || musicTimer) return;
         step = 0;
-        musicTimer = setInterval(musicStep, 300);
+        musicTimer = setInterval(musicStep, 260);
       },
       stopMusic() { if (musicTimer) { clearInterval(musicTimer); musicTimer = null; } },
       toggleMute() {
@@ -328,7 +410,7 @@
   const RIGHT = () => keys["d"] || keys["ArrowRight"];
   const UP    = () => keys["w"] || keys["ArrowUp"];
   const DOWN  = () => keys["s"] || keys["ArrowDown"];
-  const JUMP  = () => consume("w") || consume("ArrowUp") || consume("space");
+  const JUMP  = () => consume("space");
   const SHOOT = () => keys["j"] || keys["f"];
   const BOMB  = () => consume("k") || consume("b");
   const WEB   = () => consume("l") || consume("g");
@@ -359,6 +441,7 @@
     vx: 0, vy: 0,
     onGround: false,
     facing: 1,
+    aimX: 1, aimY: 0,   // aim direction (from joystick / keyboard), normalized
     hp: 100, maxHp: 100,
     shootCooldown: 0,
     bombCooldown: 0,
@@ -399,23 +482,25 @@
         name: "The Grand Hall — Immersive Theater Tokyo",
         theme: "foyer",
         worldW: 2200,
-        spawn: { x: 60, y: 380 },
+        spawn: { x: 60, y: 400 },
         platforms: [
-          { x: 0,    y: 460, w: 420, h: 80 },
-          { x: 520,  y: 420, w: 260, h: 120 },
-          { x: 880,  y: 380, w: 220, h: 160 },
-          { x: 1200, y: 440, w: 200, h: 100 },
-          { x: 1500, y: 380, w: 180, h: 160 },
-          { x: 1780, y: 430, w: 420, h: 110 },
+          // one continuous floor — no pits to fall into
+          { x: 0, y: 460, w: 2200, h: 90 },
+          // raised "stepped" sections sitting on the floor (walkable steps)
+          { x: 380,  y: 410, w: 220, h: 50 },   // low step
+          { x: 820,  y: 370, w: 200, h: 90 },   // taller block
+          { x: 1150, y: 420, w: 160, h: 40 },   // low ledge
+          { x: 1480, y: 360, w: 220, h: 100 },  // tall block (guard perches here)
+          { x: 1850, y: 410, w: 200, h: 50 },   // low step near the exit
         ],
         // One picture torn into pieces — one piece per guard. Collect all,
         // then tape them together at the door to read the answer.
         clueImage: "lantern",   // a paper lantern — the answer to L1's riddle
         enemies: [
-          { x: 600, y: 372, patrol: [540, 740], clue: 0 },
-          { x: 1550, y: 332, patrol: [1510, 1650], clue: 1 },
+          { x: 620, y: 426, patrol: [520, 780], clue: 0 },     // on the floor / low step
+          { x: 1560, y: 326, patrol: [1490, 1690], clue: 1 },  // up on the tall block
         ],
-        goal: { x: 2120, y: 350, w: 40, h: 80 },
+        goal: { x: 2120, y: 380, w: 40, h: 80 },
         riddle: {
           title: "The Grand Hall Door",
           text: "I hold a small fire but never burn the hand. I sway on a string and light the night's demand. What am I?",
@@ -429,24 +514,24 @@
         name: "Backstage — Rigging & Dressing Rooms",
         theme: "backstage",
         worldW: 2600,
-        spawn: { x: 50, y: 380 },
+        spawn: { x: 50, y: 400 },
         platforms: [
-          { x: 0,    y: 460, w: 420, h: 80 },
-          { x: 520,  y: 430, w: 220, h: 110 },
-          { x: 840,  y: 400, w: 200, h: 140 },
-          { x: 1140, y: 430, w: 200, h: 110 },
-          { x: 1440, y: 400, w: 200, h: 140 },
-          { x: 1740, y: 430, w: 200, h: 110 },
-          { x: 2040, y: 400, w: 560, h: 140 },
+          { x: 0, y: 460, w: 2600, h: 90 },     // continuous floor
+          { x: 300,  y: 410, w: 200, h: 50 },
+          { x: 700,  y: 370, w: 220, h: 90 },   // tall block (guard up high)
+          { x: 1100, y: 420, w: 180, h: 40 },
+          { x: 1450, y: 360, w: 220, h: 100 },  // taller block (guard up high)
+          { x: 1850, y: 415, w: 200, h: 45 },
+          { x: 2200, y: 385, w: 220, h: 75 },
         ],
         clueImage: "mask",   // a theatrical mask — the answer to L2's riddle
         enemies: [
-          { x: 560, y: 382, patrol: [530, 700], clue: 0 },
-          { x: 880, y: 352, patrol: [850, 1000], clue: 1 },
-          { x: 1480, y: 352, patrol: [1450, 1600], clue: 2 },
-          { x: 2100, y: 352, patrol: [2060, 2300], clue: 3 },
+          { x: 560, y: 426, patrol: [520, 660], clue: 0 },      // floor
+          { x: 780, y: 336, patrol: [710, 900], clue: 1 },      // on tall block
+          { x: 1520, y: 326, patrol: [1460, 1660], clue: 2 },   // on taller block
+          { x: 2260, y: 351, patrol: [2210, 2410], clue: 3 },   // on the raised block near exit
         ],
-        goal: { x: 2520, y: 320, w: 40, h: 80 },
+        goal: { x: 2520, y: 380, w: 40, h: 80 },
         riddle: {
           title: "The Dressing Room Lock",
           text: "I have a face that is not my own, worn on a stage where true selves are unknown. What am I?",
@@ -460,24 +545,22 @@
         name: "The Catwalk — Stage Lighting Gantry",
         theme: "catwalk",
         worldW: 2400,
-        spawn: { x: 50, y: 360 },
+        spawn: { x: 50, y: 400 },
         platforms: [
-          { x: 0,    y: 460, w: 380, h: 80 },
-          { x: 480,  y: 430, w: 160, h: 110 },
-          { x: 740,  y: 400, w: 160, h: 140 },
-          { x: 1000, y: 430, w: 160, h: 110 },
-          { x: 1260, y: 400, w: 200, h: 140 },
-          { x: 1560, y: 430, w: 160, h: 110 },
-          { x: 1820, y: 400, w: 200, h: 140 },
-          { x: 2120, y: 360, w: 280, h: 180 },
+          { x: 0, y: 460, w: 2400, h: 90 },     // continuous floor
+          { x: 360,  y: 405, w: 220, h: 55 },
+          { x: 760,  y: 365, w: 220, h: 95 },   // tall block (guard up high)
+          { x: 1150, y: 415, w: 180, h: 45 },
+          { x: 1500, y: 360, w: 240, h: 100 },  // taller block (guard up high)
+          { x: 1950, y: 410, w: 220, h: 50 },
         ],
         clueImage: "key",   // a key — the answer to L3's riddle
         enemies: [
-          { x: 760, y: 352, patrol: [740, 880], clue: 0 },
-          { x: 1290, y: 352, patrol: [1260, 1440], clue: 1 },
-          { x: 1860, y: 352, patrol: [1820, 2000], clue: 2 },
+          { x: 830, y: 331, patrol: [770, 970], clue: 0 },      // on tall block
+          { x: 1200, y: 426, patrol: [1120, 1340], clue: 1 },   // floor / low ledge
+          { x: 1580, y: 326, patrol: [1510, 1730], clue: 2 },   // on taller block
         ],
-        goal: { x: 2320, y: 280, w: 40, h: 80 },
+        goal: { x: 2320, y: 380, w: 40, h: 80 },
         riddle: {
           title: "The Catwalk Gate",
           text: "Teeth that never chew, a body thin and worn; I turn once in the dark and a locked path is born. What am I?",
@@ -515,11 +598,14 @@
   // Enemy factory
   // ---------------------------------------------------------------------
   function spawnEnemy(def) {
+    const patrol = def.patrol.slice();
     return {
       x: def.x, y: def.y, w: 24, h: 34,
-      vx: 1,
+      vx: 1, vy: 0,
       dir: 1,
-      patrol: def.patrol,
+      onGround: false,
+      patrol: patrol,
+      patrolHalf: (patrol[1] - patrol[0]) / 2, // to recenter patrol after a pull
       hp: 30, maxHp: 30,
       hitFlash: 0,     // frames of white flash after a hit
       showHp: 0,       // frames to keep the health bar visible after a hit
@@ -569,7 +655,9 @@
       id: e.clue,                 // which torn piece (0..pieces-1)
       x: e.x + e.w / 2,
       y: e.y + e.h / 2,
-      baseY: e.y + e.h / 2,
+      vy: 0,
+      landed: false,
+      baseY: 0,
       bob: Math.random() * Math.PI * 2,
       collected: false,
     });
@@ -579,13 +667,28 @@
   function totalClues() { return level.clueImage ? (level.enemies ? level.enemies.length : 0) : 0; }
   function allCluesCollected() { return collectedClues.length >= totalClues(); }
 
-  // Float the clue pickups and collect them on contact.
+  // Clue pickups fall to the ground, then bob in place; collected on contact.
   function updateClues() {
     for (const c of clues) {
       if (c.collected) continue;
-      c.bob += 0.08;
-      c.y = c.baseY + Math.sin(c.bob) * 5;
-      const pick = { x: c.x - 15, y: c.y - 15, w: 30, h: 30 };
+      if (!c.landed) {
+        c.vy += GRAVITY;
+        if (c.vy > MAX_FALL) c.vy = MAX_FALL;
+        c.y += c.vy;
+        // land on the first platform top beneath the clue
+        const box = { x: c.x - 10, y: c.y - 10, w: 20, h: 20 };
+        for (const p of level.platforms) {
+          if (rectsOverlap(box, p) && c.vy >= 0) {
+            c.y = p.y - 10;      // rest just above the surface
+            c.vy = 0; c.landed = true; c.baseY = c.y;
+            break;
+          }
+        }
+      } else {
+        c.bob += 0.08;
+        c.y = c.baseY + Math.sin(c.bob) * 4;
+      }
+      const pick = { x: c.x - 16, y: c.y - 16, w: 32, h: 32 };
       if (rectsOverlap(player, pick)) {
         c.collected = true;
         if (!collectedClues.includes(c.id)) {
@@ -645,11 +748,38 @@
   // ---------------------------------------------------------------------
   // Update: player
   // ---------------------------------------------------------------------
+  function updateAim() {
+    let ax = 0, ay = 0;
+    if (stick.active && (Math.abs(stick.x) > 0.3 || Math.abs(stick.y) > 0.3)) {
+      ax = stick.x; ay = stick.y;
+    } else {
+      // keyboard: horizontal from facing, vertical from up/down keys
+      ax = player.facing;
+      if (keys["w"] || keys["ArrowUp"]) ay = -1;
+      else if (keys["s"] || keys["ArrowDown"]) ay = 1;
+      // allow left/right keys to steer aim horizontally too
+      if (keys["a"] || keys["ArrowLeft"]) ax = -1;
+      else if (keys["d"] || keys["ArrowRight"]) ax = 1;
+    }
+    if (ax === 0 && ay === 0) ax = player.facing;
+    const len = Math.hypot(ax, ay) || 1;
+    player.aimX = ax / len;
+    player.aimY = ay / len;
+  }
+
   function updatePlayer() {
-    // Horizontal movement
-    if (LEFT())  { player.vx = -MOVE_SPEED; player.facing = -1; }
-    else if (RIGHT()) { player.vx = MOVE_SPEED; player.facing = 1; }
-    else { player.vx *= FRICTION; if (Math.abs(player.vx) < 0.1) player.vx = 0; }
+    // Horizontal movement — keyboard OR joystick x.
+    const stickMoveX = Math.abs(stick.x) > 0.25 ? stick.x : 0;
+    if (LEFT())       { player.vx = -MOVE_SPEED; player.facing = -1; }
+    else if (RIGHT()) { player.vx = MOVE_SPEED;  player.facing = 1; }
+    else if (stickMoveX !== 0) {
+      player.vx = MOVE_SPEED * Math.max(-1, Math.min(1, stickMoveX));
+      player.facing = stickMoveX > 0 ? 1 : -1;
+    } else { player.vx *= FRICTION; if (Math.abs(player.vx) < 0.1) player.vx = 0; }
+
+    // Aim direction: from the joystick if it's pushed, else keyboard arrows/WASD
+    // vertical, else straight in the facing direction.
+    updateAim();
 
     // Jump — with coyote time (grace after leaving a ledge) and jump
     // buffering (press slightly before landing still registers).
@@ -682,13 +812,18 @@
     // Fell off the world
     if (player.y > H + 200) damagePlayer(35, true);
 
-    // Shooting
+    // Shooting — fires along the aim direction (joystick / keyboard).
     if (player.shootCooldown > 0) player.shootCooldown--;
     if (SHOOT() && player.shootCooldown === 0) {
+      const speed = 9.5;
+      const cx = player.x + player.w / 2;
+      const cy = player.y + 14;
       bullets.push({
-        x: player.facing > 0 ? player.x + player.w : player.x - 6,
-        y: player.y + 14, w: 8, h: 4,
-        vx: player.facing * 9,
+        x: cx + player.aimX * 14 - 4,
+        y: cy + player.aimY * 14 - 2,
+        w: 8, h: 4,
+        vx: player.aimX * speed,
+        vy: player.aimY * speed,
       });
       player.shootCooldown = 12;
       Sfx.shoot();
@@ -865,6 +1000,25 @@
   // ---------------------------------------------------------------------
   // Update: enemies
   // ---------------------------------------------------------------------
+  // Resolve an enemy vertically against the floor/blocks so it rests on the
+  // ground beneath it (used for gravity + web-pulled guards landing).
+  function landEnemy(e) {
+    e.vy += GRAVITY;
+    if (e.vy > MAX_FALL) e.vy = MAX_FALL;
+    e.y += e.vy;
+    e.onGround = false;
+    for (const p of level.platforms) {
+      if (rectsOverlap(e, p)) {
+        if (e.vy > 0 && (e.y + e.h) - p.y < 26) { // landing on top
+          e.y = p.y - e.h; e.vy = 0; e.onGround = true;
+        }
+      }
+    }
+    // keep within the world
+    if (e.x < 0) e.x = 0;
+    if (e.x + e.w > level.worldW) e.x = level.worldW - e.w;
+  }
+
   function updateEnemies() {
     for (const e of enemies) {
       if (!e.alive) continue;
@@ -872,14 +1026,28 @@
       if (e.hitFlash > 0) e.hitFlash--;
       if (e.showHp > 0) e.showHp--;
 
-      // While stunned (just webbed), the guard can't patrol or shoot.
+      // Gravity always applies so guards rest on the ground and any
+      // web-pulled guard falls and lands (never floats).
+      landEnemy(e);
+
+      // While stunned (just webbed) the guard can't patrol or shoot, but it
+      // still falls (handled above). When the stun ends, recenter its patrol
+      // around wherever it landed so it resumes there and never snaps back.
       if (e.stun > 0) {
         e.stun--;
+        if (e.stun === 0 && !e.webbed) {
+          const c = e.x + e.w / 2;
+          e.patrol = [c - e.patrolHalf, c + e.patrolHalf];
+        }
+        if (rectsOverlap(player, e)) damagePlayer(18);
+        continue;
+      }
+      if (e.webbed) { // being reeled — don't patrol yet
         if (rectsOverlap(player, e)) damagePlayer(18);
         continue;
       }
 
-      // Patrol
+      // Patrol (only meaningful when on the ground)
       e.x += e.vx * e.dir;
       if (e.x < e.patrol[0]) { e.x = e.patrol[0]; e.dir = 1; }
       if (e.x > e.patrol[1]) { e.x = e.patrol[1]; e.dir = -1; }
@@ -944,6 +1112,7 @@
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.x += b.vx;
+      if (b.vy) b.y += b.vy;
       let hit = false;
 
       // vs platforms
@@ -972,7 +1141,7 @@
         if (boss.hp <= 0) { boss.hp = 0; boss.alive = false; onBossDefeated(); }
       }
 
-      if (hit || b.x < -20 || b.x > level.worldW + 20) bullets.splice(i, 1);
+      if (hit || b.x < -20 || b.x > level.worldW + 20 || b.y < -40 || b.y > H + 40) bullets.splice(i, 1);
     }
 
     // enemy bullets
@@ -1408,10 +1577,25 @@
     // belt
     ctx.fillStyle = "#ff5c8a";
     ctx.fillRect(px, py + 22, player.w, 3);
-    // gun
-    ctx.fillStyle = "#c9ccd8";
-    if (player.facing > 0) ctx.fillRect(px + player.w, py + 16, 10, 4);
-    else ctx.fillRect(px - 10, py + 16, 10, 4);
+    // gun + aim indicator — points in the aim direction
+    const gx = px + player.w / 2;
+    const gy = py + 18;
+    const ax = player.aimX, ay = player.aimY;
+    ctx.strokeStyle = "#c9ccd8";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(gx, gy);
+    ctx.lineTo(gx + ax * 14, gy + ay * 14);
+    ctx.stroke();
+    // faint dotted aim line
+    ctx.strokeStyle = "rgba(255,92,138,0.35)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath();
+    ctx.moveTo(gx + ax * 16, gy + ay * 16);
+    ctx.lineTo(gx + ax * 90, gy + ay * 90);
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   function drawEnemies() {

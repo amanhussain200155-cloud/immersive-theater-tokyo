@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Immersive Theater Tokyo</title>
-  <link rel="stylesheet" href="style.css?v=4" />
+  <link rel="stylesheet" href="style.css?v=5" />
 </head>
 <body>
   <div id="game-wrap">
@@ -18,9 +18,8 @@
 
     <!-- On-screen touch controls (mobile) -->
     <div id="touch-controls" class="hidden">
-      <div class="pad pad-left">
-        <button class="tbtn" data-key="left"  aria-label="Move left">◀</button>
-        <button class="tbtn" data-key="right" aria-label="Move right">▶</button>
+      <div id="joystick" aria-label="Move and aim">
+        <div id="joystick-knob"></div>
       </div>
       <div class="pad pad-right">
         <button class="tbtn tbtn-web"   data-key="web"   aria-label="Throw web">🕸️</button>
@@ -52,11 +51,12 @@
         <p id="msg-body"></p>
         <button id="msg-button">Start Mission</button>
         <p class="controls-help">
-          Move: <b>A / D</b> or <b>&larr; / &rarr;</b> &nbsp;|&nbsp;
-          Jump: <b>W</b> / <b>&uarr;</b> / <b>Space</b> &nbsp;|&nbsp;
+          Move + aim: <b>A / D</b>, <b>&uarr; / &darr;</b> (aim) &nbsp;|&nbsp;
+          Jump: <b>Space</b> &nbsp;|&nbsp;
           Shoot: <b>J / F</b> &nbsp;|&nbsp;
           Bomb: <b>K / B</b> &nbsp;|&nbsp;
-          Web-pull: <b>L / G</b>
+          Web-pull: <b>L / G</b><br/>
+          On touch: use the <b>joystick</b> to move &amp; aim, and the jump button.
         </p>
       </div>
     </div>
@@ -69,6 +69,6 @@
     <p>Immersive Theater Tokyo plays best in landscape. Turn your device sideways to start.</p>
   </div>
 
-  <script src="game.js?v=4"></script>
+  <script src="game.js?v=5"></script>
 </body>
 </html>

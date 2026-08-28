@@ -146,28 +146,30 @@
 
   // ---- Drag-to-aim action buttons (shoot / bomb / web) ----
   // Press an action button and (optionally) drag to aim; releasing fires the
-  // action in the aimed direction. A quick tap fires straight ahead.
-  let aimHold = 0; // frames to keep touchAim active around a release
+  // action in the aimed direction. Hold to fire continuously while aiming;
+  // drag to change the aim while firing.
+  let heldAim = null;   // { action } while an aim button is pressed
   function aimFromDrag(btn, clientX, clientY) {
     const r = btn.getBoundingClientRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;
     const dx = clientX - cx, dy = clientY - cy;
     const dist = Math.hypot(dx, dy);
-    if (dist < 12) {           // basically a tap — aim straight ahead
+    if (dist < 12) {           // near-center — aim straight ahead
       touchAim.x = player.facing; touchAim.y = 0;
     } else {
       touchAim.x = dx / dist; touchAim.y = dy / dist;
     }
     touchAim.active = true;
   }
-  let shootPulse = 0; // frames to hold the shoot key after a tap/drag-release
-  function fireAction(action) {
-    // Hold the aim briefly so the shot/throw uses the aimed direction.
-    aimHold = 6;
-    if (action === "shoot") { shootPulse = 4; }         // frame-based shoot hold
-    else if (action === "bomb") { pressed["k"] = true; } // one-shot consumed by BOMB()
-    else if (action === "web")  { pressed["l"] = true; } // one-shot consumed by WEB()
+  // Called every frame while an aim button is held: keep aiming + fire.
+  function driveHeldAim() {
+    if (!heldAim) return;
+    touchAim.active = true;              // keep the current aim live
+    const a = heldAim.action;
+    if (a === "shoot") { keys["j"] = true; }        // continuous fire (rate-limited by cooldown)
+    else if (a === "bomb") { pressed["k"] = true; } // auto-repeat at bomb cooldown
+    else if (a === "web")  { pressed["l"] = true; } // auto-repeat at web cooldown
   }
   function bindAimButton(btn) {
     const action = btn.getAttribute("data-key");
@@ -179,6 +181,7 @@
       btn.classList.add("pressed");
       const p = e.touches ? e.touches[0] : e;
       aimFromDrag(btn, p.clientX, p.clientY);
+      heldAim = { action };            // start firing while held
     };
     const move = (e) => {
       if (ptr === null) return;
@@ -190,10 +193,11 @@
       if (ptr === null) return;
       e.preventDefault();
       btn.classList.remove("pressed");
-      fireAction(action);           // fire in the current aim direction
       ptr = null;
-      // clear aim shortly after so it doesn't linger
-      setTimeout(() => { if (aimHold <= 0) { touchAim.active = false; touchAim.x = 0; touchAim.y = 0; } }, 90);
+      heldAim = null;                  // stop firing
+      keys["j"] = false;               // release continuous shoot
+      // let the aim linger a hair, then revert to keyboard/facing
+      setTimeout(() => { if (!heldAim) { touchAim.active = false; touchAim.x = 0; touchAim.y = 0; } }, 90);
     };
     btn.addEventListener("pointerdown", down);
     btn.addEventListener("pointermove", move);
@@ -417,7 +421,7 @@
   const UP    = () => keys["w"] || keys["ArrowUp"];
   const DOWN  = () => keys["s"] || keys["ArrowDown"];
   const JUMP  = () => consume("space");
-  const SHOOT = () => keys["j"] || keys["f"] || shootPulse > 0;
+  const SHOOT = () => keys["j"] || keys["f"];
   const BOMB  = () => consume("k") || consume("b");
   const WEB   = () => consume("l") || consume("g");
 
@@ -1979,8 +1983,7 @@
     state.time++;
     if (state.mode === "play") {
       if (state.gatePrompt > 0) state.gatePrompt--;
-      if (aimHold > 0) { aimHold--; if (aimHold === 0) { touchAim.active = false; touchAim.x = 0; touchAim.y = 0; } }
-      if (shootPulse > 0) shootPulse--;
+      driveHeldAim();   // continuous fire + live aim while an action button is held
       updatePlayer();
       updateEnemies();
       updateBoss();

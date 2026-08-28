@@ -1710,7 +1710,7 @@
   // skirt/dress + longer hair; the spy gets a ponytail + pink belt.
   function drawPartyPerson(x, feetY, color, hair, tall, t, isSpy, female) {
     const bodyH = tall ? 54 : 46;   // head+torso height
-    const legH = 12;
+    const legH = 18;
     const w = 22;
     const y = feetY - legH - bodyH; // top of head, so feet sit on the floor
 
@@ -1721,19 +1721,21 @@
     ctx.moveTo(x + w - 6, feetY - legH); ctx.lineTo(x + w - 6, feetY);
     ctx.stroke();
 
+    const torsoTop = y + 14;          // just below the head
+    const hipY = feetY - legH;        // torso ends here, so legs stay visible
     if (female && !isSpy) {
-      // dress: torso + a triangular skirt over the top of the legs
+      // dress: fitted top + a flared skirt that ends at the hip (above the legs)
       ctx.fillStyle = color;
-      ctx.fillRect(x + 2, y + 14, w - 4, bodyH * 0.5);      // upper dress
+      ctx.fillRect(x + 3, torsoTop, w - 6, (hipY - torsoTop) * 0.45); // bodice
       ctx.beginPath();
-      ctx.moveTo(x - 4, feetY - legH);
-      ctx.lineTo(x + w + 4, feetY - legH);
-      ctx.lineTo(x + w / 2, y + 24);
-      ctx.closePath(); ctx.fill();                          // flared skirt
+      ctx.moveTo(x - 4, hipY);
+      ctx.lineTo(x + w + 4, hipY);
+      ctx.lineTo(x + w / 2, torsoTop + (hipY - torsoTop) * 0.35);
+      ctx.closePath(); ctx.fill();                                    // flared skirt
     } else {
-      // trousered body
+      // trousered torso — ends at the hip so the legs show below
       ctx.fillStyle = color;
-      ctx.fillRect(x, y + 14, w, bodyH);
+      ctx.fillRect(x, torsoTop, w, hipY - torsoTop);
     }
 
     // head

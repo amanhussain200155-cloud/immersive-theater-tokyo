@@ -458,6 +458,7 @@
     webCooldown: 0,
     invuln: 0,
     hasShield: false,      // picked up the shield on the boss level (permanent for the level)
+    shieldTimer: 0,        // frames of shield protection remaining
     coyote: 0,       // frames since last grounded (for coyote-time jumps)
     jumpBuffer: 0,   // frames since jump was pressed (for buffered jumps)
     reset(spawn) {
@@ -466,7 +467,7 @@
       this.onGround = false;
       this.hp = this.maxHp; this.invuln = 0; this.shootCooldown = 0;
       this.bombCooldown = 0; this.webCooldown = 0;
-      this.hasShield = false;
+      this.hasShield = false; this.shieldTimer = 0;
       this.coyote = 0; this.jumpBuffer = 0;
       this.facing = 1;
     }
@@ -481,8 +482,18 @@
   // target which is reeled toward the spy. { target, life } or null.
   let web = null;
 
-  // Shield pickup lying on the boss-level ground: { x,y,w,h, taken } or null.
+  // Shield pickup lying on the boss-level ground: { x,y,w,h } or null.
   let shieldPickup = null;
+  const SHIELD_DURATION = 600;   // ~10 seconds of protection once collected
+  let shieldSpawnSide = 0;       // alternate spawn spots for variety
+  // Drop a fresh shield on the boss-level ground (alternating position).
+  function spawnShieldPickup() {
+    if (!level || !level.isBoss) return;
+    const spots = [300, 620, level.worldW - 340];
+    const x = spots[shieldSpawnSide % spots.length];
+    shieldSpawnSide++;
+    shieldPickup = { x: x, y: 470 - 30, w: 30, h: 30 };
+  }
 
   // ---------------------------------------------------------------------
   // Levels
@@ -652,9 +663,10 @@
     camX = 0;
     boss = null;
     if (level.isBoss) {
-      // A shield lies on the ground near the start — walk over it to gain a
-      // protective layer for the whole boss level (optional).
-      shieldPickup = { x: 300, y: 470 - 30, w: 30, h: 30, taken: false };
+      // A timed shield lies on the ground — grab it for ~10s of protection;
+      // when it wears off, a fresh one drops. (optional to use)
+      shieldSpawnSide = 0;
+      spawnShieldPickup();
       boss = {
         x: 720, y: 340, w: 60, h: 90,
         vx: 2.4, dir: -1, vy: 0,
@@ -833,12 +845,22 @@
     // Fell off the world
     if (player.y > H + 200) damagePlayer(35, true);
 
-    // Shield pickup collection (boss level): walk over it to gain a permanent
-    // protective layer for the rest of the level.
+    // Shield pickup collection (boss level): walk over it to gain a TIMED
+    // protective layer. When it wears off, a fresh shield drops on the ground.
     if (shieldPickup && !shieldPickup.taken && rectsOverlap(player, shieldPickup)) {
-      shieldPickup.taken = true;
+      shieldPickup = null;                 // consume the pickup
       player.hasShield = true;
+      player.shieldTimer = SHIELD_DURATION; // ~10s of protection
       Sfx.win();  // a small triumphant pickup chime
+    }
+    // Shield countdown; when it expires, drop a new shield to collect.
+    if (player.hasShield) {
+      player.shieldTimer--;
+      if (player.shieldTimer <= 0) {
+        player.hasShield = false;
+        player.shieldTimer = 0;
+        spawnShieldPickup();               // a fresh shield appears immediately
+      }
     }
 
     // Shooting — fires along the aim direction (joystick / keyboard).
@@ -2053,7 +2075,7 @@
 
   // The shield pickup lying on the boss-level ground (until collected).
   function drawShieldPickup() {
-    if (!shieldPickup || shieldPickup.taken) return;
+    if (!shieldPickup) return;
     const s = shieldPickup;
     const cx = s.x + s.w / 2, cy = s.y + s.h / 2;
     // glow
@@ -2098,13 +2120,19 @@
     ctx.font = "bold 13px sans-serif";
     ctx.fillText("HP", 24, 33);
 
-    // shield status badge (only when the shield has been picked up)
+    // shield time meter (only while the shield is active) — shows it running down
     if (player.hasShield) {
+      const frac = Math.max(0, player.shieldTimer / SHIELD_DURATION);
       ctx.fillStyle = "#000a";
-      ctx.fillRect(16, 42, 120, 18);
-      ctx.fillStyle = "#6cc7ff";
-      ctx.font = "bold 12px sans-serif";
-      ctx.fillText("🛡 SHIELDED", 22, 55);
+      ctx.fillRect(16, 42, 150, 18);
+      ctx.fillStyle = "#22406a";
+      ctx.fillRect(18, 44, 100, 12);
+      // bar goes blue -> orange as it runs low
+      ctx.fillStyle = frac > 0.3 ? "#6cc7ff" : "#ffb057";
+      ctx.fillRect(18, 44, 100 * frac, 12);
+      ctx.fillStyle = "#cfe6ff";
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillText("🛡 " + Math.ceil(player.shieldTimer / 60) + "s", 124, 54);
     }
 
     // level name

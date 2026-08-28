@@ -1541,14 +1541,15 @@
     party.blewAt = 0;
     Sfx.stopMusic();
     Sfx.happyBirthday();   // play the birthday tune over the scene
-    // guests stand to the sides, leaving the centre for the cake + spy
+    // guests stand ON the floor to the sides, leaving the centre for the cake.
+    // feetY 430 = floor top; drawPartyPerson places feet there.
     party.guests = [
-      { x: 170, y: 300, c: "#6cc7ff", hair: "#3a2a18", tall: true,  bob: 0.0 },  // male
-      { x: 250, y: 300, c: "#ff9ec7", hair: "#5b3a1e", tall: false, bob: 1.0 },  // female
-      { x: 330, y: 300, c: "#31d17e", hair: "#3a2a18", tall: false, bob: 1.6 },  // female
-      { x: 630, y: 300, c: "#8b5cff", hair: "#222",    tall: true,  bob: 2.0 },  // male
-      { x: 710, y: 300, c: "#ffd166", hair: "#5b3a1e", tall: false, bob: 0.5 },  // female
-      { x: 790, y: 300, c: "#ff6b6b", hair: "#3a2a18", tall: true,  bob: 2.4 },  // male
+      { x: 150, c: "#6cc7ff", hair: "#3a2a18", tall: true,  female: false, bob: 0.0 },
+      { x: 230, c: "#ff9ec7", hair: "#7a4a22", tall: false, female: true,  bob: 1.0 },
+      { x: 310, c: "#31d17e", hair: "#3a2a18", tall: true,  female: false, bob: 1.6 },
+      { x: 630, c: "#ffd166", hair: "#7a4a22", tall: false, female: true,  bob: 0.5 },
+      { x: 710, c: "#8b5cff", hair: "#222",    tall: true,  female: false, bob: 2.0 },
+      { x: 790, c: "#ff6b6b", hair: "#5b2a4a", tall: false, female: true,  bob: 2.4 },
     ];
     party.confetti = [];
     for (let i = 0; i < 80; i++) {
@@ -1660,14 +1661,15 @@
       }
     }
 
-    // ---- guests (friends & family) bouncing / waving ----
+    // ---- guests (friends & family) bouncing / waving, feet on the floor ----
+    const FLOOR = 430;
     for (const gst of party.guests) {
-      const by = gst.y + Math.abs(Math.sin(t * 0.08 + gst.bob)) * -8; // gentle bounce
-      drawPartyPerson(gst.x, by, gst.c, gst.hair, gst.tall, t);
+      const bounce = Math.abs(Math.sin(t * 0.08 + gst.bob)) * 6;
+      drawPartyPerson(gst.x, FLOOR - bounce, gst.c, gst.hair, gst.tall, t, false, gst.female);
     }
 
-    // ---- the spy walking in from the left ----
-    drawPartyPerson(party.spyX, 300 + Math.abs(Math.sin(t * 0.25)) * -4, "#20243b", "#5b3a1e", false, t, true);
+    // ---- the spy walking in from the left (feet on the floor) ----
+    drawPartyPerson(party.spyX, FLOOR - Math.abs(Math.sin(t * 0.25)) * 3, "#20243b", "#5b3a1e", false, t, true, true);
 
     // ---- confetti ----
     for (const c of party.confetti) {
@@ -1704,27 +1706,54 @@
     ctx.textAlign = "left";
   }
 
-  // A little party character (body + head + hair); spy has a pink belt + ponytail.
-  function drawPartyPerson(x, y, color, hair, tall, t, isSpy) {
-    const h = tall ? 66 : 58;
+  // A little party character with feet planted at feetY. Females get a
+  // skirt/dress + longer hair; the spy gets a ponytail + pink belt.
+  function drawPartyPerson(x, feetY, color, hair, tall, t, isSpy, female) {
+    const bodyH = tall ? 54 : 46;   // head+torso height
+    const legH = 12;
     const w = 22;
-    // body
-    ctx.fillStyle = color; ctx.fillRect(x, y + 14, w, h - 14);
+    const y = feetY - legH - bodyH; // top of head, so feet sit on the floor
+
+    // legs (drawn first, behind the body)
+    ctx.strokeStyle = "#2a2a33"; ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(x + 6, feetY - legH); ctx.lineTo(x + 6, feetY);
+    ctx.moveTo(x + w - 6, feetY - legH); ctx.lineTo(x + w - 6, feetY);
+    ctx.stroke();
+
+    if (female && !isSpy) {
+      // dress: torso + a triangular skirt over the top of the legs
+      ctx.fillStyle = color;
+      ctx.fillRect(x + 2, y + 14, w - 4, bodyH * 0.5);      // upper dress
+      ctx.beginPath();
+      ctx.moveTo(x - 4, feetY - legH);
+      ctx.lineTo(x + w + 4, feetY - legH);
+      ctx.lineTo(x + w / 2, y + 24);
+      ctx.closePath(); ctx.fill();                          // flared skirt
+    } else {
+      // trousered body
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y + 14, w, bodyH);
+    }
+
     // head
     ctx.fillStyle = "#e8c7a0"; ctx.fillRect(x + 4, y, w - 8, 14);
-    // hair
-    ctx.fillStyle = hair; ctx.fillRect(x + 3, y - 2, w - 6, 6);
-    if (isSpy) {
-      ctx.fillStyle = hair; ctx.fillRect(x - 3, y + 1, 4, 16);          // ponytail
-      ctx.fillStyle = "#ff5c8a"; ctx.fillRect(x, y + 22, w, 3);          // pink belt
+    // hair (longer for females)
+    ctx.fillStyle = hair;
+    ctx.fillRect(x + 3, y - 2, w - 6, 6);                   // hair top
+    if (female || isSpy) {
+      ctx.fillRect(x + 1, y, 3, 18);                        // long hair, left
+      ctx.fillRect(x + w - 4, y, 3, 18);                    // long hair, right
     }
+    if (isSpy) {
+      ctx.fillStyle = hair; ctx.fillRect(x - 3, y + 1, 4, 16);   // ponytail
+      ctx.fillStyle = "#ff5c8a"; ctx.fillRect(x, y + 22, w, 3);  // pink belt
+    }
+
     // waving arm
     const wave = Math.sin(t * 0.2 + x) * 8;
     ctx.strokeStyle = color; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.moveTo(x + w, y + 22); ctx.lineTo(x + w + 8, y + 12 + wave); ctx.stroke();
-    // legs
-    ctx.strokeStyle = "#2a2a33"; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(x + 6, y + h); ctx.lineTo(x + 6, y + h + 12); ctx.moveTo(x + w - 6, y + h); ctx.lineTo(x + w - 6, y + h + 12); ctx.stroke();
   }
 
   const BIRTHDAY_MESSAGE = "Happy Birthday Risa-san! You brought the house down at the immersive theater " +

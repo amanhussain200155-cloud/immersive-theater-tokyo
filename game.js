@@ -33,7 +33,7 @@
 
   // Tap/click during the celebration cutscene skips ahead to the message.
   function celebrationTapSkip(e) {
-    if (state.mode === "celebration" && state.celebrationTimer > 40) {
+    if (state.mode === "celebration" && !party.candlesLit && (state.celebrationTimer - party.blewAt) > 120) {
       if (e) e.preventDefault();
       pressed["celebrationSkip"] = true;
     }
@@ -1499,29 +1499,32 @@
 
   function onBossDefeated() {
     Sfx.enemyDown();
-    // brief pause on the defeat, then roll the birthday celebration cutscene
-    setTimeout(startCelebration, 700);
+    // brief pause on the defeat, then show the birthday message first.
+    setTimeout(onGameWin, 700);
   }
 
-  // ----- Birthday celebration cutscene -----
-  const CELEBRATION_LENGTH = 460; // ~7.5s before the message appears
-  const party = { guests: [], confetti: [], spyX: -60 };
+  // ----- Birthday celebration cutscene (plays AFTER the message) -----
+  const CELEBRATION_LENGTH = 900; // ~15s of party before "The End" caption
+  const party = { guests: [], confetti: [], spyX: -60, candlesLit: true, blewAt: 0 };
   function startCelebration() {
     state.mode = "celebration";
     state.celebrationTimer = 0;
+    party.spyX = -60;
+    party.candlesLit = true;
+    party.blewAt = 0;
     Sfx.stopMusic();
     Sfx.happyBirthday();   // play the birthday tune over the scene
-    // set up guests (friends & family — male & female cues via colors/hair)
-    party.spyX = -60;
+    // guests stand to the sides, leaving the centre for the cake + spy
     party.guests = [
-      { x: 300, y: 300, c: "#6cc7ff", hair: "#3a2a18", tall: true,  bob: 0.0 },  // male
-      { x: 380, y: 300, c: "#ff9ec7", hair: "#5b3a1e", tall: false, bob: 1.0 },  // female
-      { x: 620, y: 300, c: "#8b5cff", hair: "#222",    tall: true,  bob: 2.0 },  // male
-      { x: 700, y: 300, c: "#ffd166", hair: "#5b3a1e", tall: false, bob: 0.5 },  // female
-      { x: 560, y: 300, c: "#31d17e", hair: "#3a2a18", tall: false, bob: 1.6 },  // female
+      { x: 170, y: 300, c: "#6cc7ff", hair: "#3a2a18", tall: true,  bob: 0.0 },  // male
+      { x: 250, y: 300, c: "#ff9ec7", hair: "#5b3a1e", tall: false, bob: 1.0 },  // female
+      { x: 330, y: 300, c: "#31d17e", hair: "#3a2a18", tall: false, bob: 1.6 },  // female
+      { x: 630, y: 300, c: "#8b5cff", hair: "#222",    tall: true,  bob: 2.0 },  // male
+      { x: 710, y: 300, c: "#ffd166", hair: "#5b3a1e", tall: false, bob: 0.5 },  // female
+      { x: 790, y: 300, c: "#ff6b6b", hair: "#3a2a18", tall: true,  bob: 2.4 },  // male
     ];
     party.confetti = [];
-    for (let i = 0; i < 70; i++) {
+    for (let i = 0; i < 80; i++) {
       party.confetti.push({
         x: Math.random() * W, y: Math.random() * -H,
         vy: 1 + Math.random() * 2, vx: (Math.random() - 0.5) * 1.2,
@@ -1533,16 +1536,26 @@
 
   function updateCelebration() {
     state.celebrationTimer++;
-    // spy walks in from the left to join the group
-    if (party.spyX < 200) party.spyX += 2.2;
+    const t = state.celebrationTimer;
+    // spy walks to the CENTRE, stopping just left of the cake
+    const target = W / 2 - 60;
+    if (party.spyX < target) party.spyX += 2.4;
+    // once she reaches the cake and a beat passes, she blows out the candles
+    if (party.candlesLit && party.spyX >= target && t > 150) {
+      party.candlesLit = false;
+      party.blewAt = t;
+      Sfx.win(); // a cheerful chime as the candles go out
+    }
     // confetti falls and wraps around
     for (const c of party.confetti) {
       c.y += c.vy; c.x += c.vx; c.rot += 0.05;
       if (c.y > H) { c.y = -10; c.x = Math.random() * W; }
     }
-    // after the scene plays (or on tap/click/space) show the message
-    if (state.celebrationTimer > CELEBRATION_LENGTH || consume("space") || consume("celebrationSkip")) {
-      onGameWin();
+    // The party is the finale — it lingers. A tap after the candles are blown
+    // ends on a final screen.
+    if (!party.candlesLit && (t - party.blewAt) > 120 && (consume("space") || consume("celebrationSkip"))) {
+      state.mode = "ended";
+      showMessage("✅ Mission Complete", "Thanks for playing, agent. 🎭  The End.", null, null);
     }
   }
 
@@ -1598,12 +1611,25 @@
     ctx.fillStyle = "#f4d9e6"; ctx.fillRect(cx - 45, ty - 8, 90, 40);
     ctx.fillStyle = "#e59abf"; ctx.fillRect(cx - 45, ty - 8, 90, 8); // frosting
     ctx.fillStyle = "#c76b93"; for (let dx = -36; dx <= 36; dx += 18) { ctx.beginPath(); ctx.arc(cx + dx, ty, 4, 0, Math.PI * 2); ctx.fill(); }
-    // candles + flames
+    // candles + flames (extinguish when the spy blows them out)
     for (let dx = -30; dx <= 30; dx += 30) {
       ctx.fillStyle = "#fff"; ctx.fillRect(cx + dx - 2, ty - 26, 4, 18);
-      const fl = 3 + Math.sin(t * 0.4 + dx) * 1.5;
-      ctx.fillStyle = "#ffcf5c";
-      ctx.beginPath(); ctx.ellipse(cx + dx, ty - 30, 3, fl + 3, 0, 0, Math.PI * 2); ctx.fill();
+      if (party.candlesLit) {
+        const fl = 3 + Math.sin(t * 0.4 + dx) * 1.5;
+        ctx.fillStyle = "#ffcf5c";
+        ctx.beginPath(); ctx.ellipse(cx + dx, ty - 30, 3, fl + 3, 0, 0, Math.PI * 2); ctx.fill();
+      } else {
+        // rising smoke puff after being blown out
+        const age = t - party.blewAt;
+        if (age < 90) {
+          ctx.fillStyle = "rgba(200,200,210," + Math.max(0, 0.5 - age / 180) + ")";
+          for (let s = 0; s < 3; s++) {
+            const sy = ty - 30 - age * 0.6 - s * 6;
+            const sx = cx + dx + Math.sin((age + s * 20) * 0.1) * 4;
+            ctx.beginPath(); ctx.arc(sx, sy, 3 + s, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+      }
     }
 
     // ---- guests (friends & family) bouncing / waving ----
@@ -1623,14 +1649,28 @@
       ctx.restore();
     }
 
-    // hint to continue
-    if (t > 90) {
-      ctx.fillStyle = "rgba(255,255,255," + (0.5 + 0.5 * Math.sin(t * 0.1)) + ")";
-      ctx.font = "14px Segoe UI, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("tap to continue", W / 2, H - 24);
-      ctx.textAlign = "left";
+    // ---- captions ----
+    ctx.textAlign = "center";
+    if (party.candlesLit) {
+      // subtle prompt while she walks up / before blowing
+      if (t > 60) {
+        ctx.fillStyle = "#ffe9b0";
+        ctx.font = "16px Segoe UI, sans-serif";
+        ctx.fillText("Make a wish, Risa-san…", W / 2, H - 26);
+      }
+    } else {
+      const age = t - party.blewAt;
+      // big celebratory line after the candles are blown
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 26px Segoe UI, sans-serif";
+      ctx.fillText("🎂  The End  🎂", W / 2, H - 46);
+      if (age > 120) {
+        ctx.fillStyle = "rgba(255,255,255," + (0.5 + 0.5 * Math.sin(t * 0.1)) + ")";
+        ctx.font = "13px Segoe UI, sans-serif";
+        ctx.fillText("tap to finish", W / 2, H - 20);
+      }
     }
+    ctx.textAlign = "left";
   }
 
   // A little party character (body + head + hair); spy has a pink belt + ponytail.
@@ -1669,14 +1709,9 @@
       BIRTHDAY_MESSAGE,
       "Mission Complete",
       () => {
-        // End the game — show a final screen with no further options.
-        state.mode = "ended";
-        showMessage(
-          "✅ Mission Complete",
-          "Thanks for playing, agent. 🎭  The End.",
-          null,          // no button — the game is over
-          null
-        );
+        // Roll the birthday celebration animation as the finale.
+        hideMessage();
+        startCelebration();
       }
     );
   }

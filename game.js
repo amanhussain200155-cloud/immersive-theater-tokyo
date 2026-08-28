@@ -330,11 +330,11 @@
       shoot()     { tone(880, 0.09, "square", 0.16, 220); },
       jump()      { tone(360, 0.16, "square", 0.18, 720); },
       hit()       { /* smacking hit sound removed by request */ },
-      enemyDown() { noise(0.22, 0.32, 500); tone(160, 0.3, "sawtooth", 0.18, 60); },
-      hurt()      { noise(0.18, 0.3, 300); tone(140, 0.22, "square", 0.16, 70); },
-      bossHit()   { tone(120, 0.1, "sawtooth", 0.12, 80); },
+      enemyDown() { /* guard/boss death sound removed by request */ },
+      hurt()      { /* take-damage sound removed by request */ },
+      bossHit()   { /* boss-hit / shield-block thud removed by request */ },
       win()       { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.28, "sine", 0.25), i * 140)); },
-      lose()      { [440, 349, 262].forEach((f, i) => setTimeout(() => tone(f, 0.35, "triangle", 0.22), i * 180)); },
+      lose()      { /* spy-death sound removed by request */ },
       // The "Happy Birthday to You" melody. [freq, beats] pairs; 0 = rest.
       happyBirthday() {
         if (!ensure()) return;

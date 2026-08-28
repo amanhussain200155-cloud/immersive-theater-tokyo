@@ -15,6 +15,40 @@
   const W = canvas.width;   // 960
   const H = canvas.height;  // 540
 
+  // Scale the canvas to fit the viewport while preserving its 16:9 aspect
+  // ratio (letterbox). This guarantees the whole scene is visible on any
+  // screen — no cropping on the right, characters stay visible.
+  function fitCanvas() {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const scale = Math.min(vw / W, vh / H);
+    const cssW = Math.round(W * scale);
+    const cssH = Math.round(H * scale);
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+  }
+  window.addEventListener("resize", fitCanvas);
+  window.addEventListener("orientationchange", () => setTimeout(fitCanvas, 200));
+  fitCanvas();
+
+  // Best-effort fullscreen + landscape lock (only where the browser allows).
+  function enterFullscreenLandscape() {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if (req) {
+      try {
+        const p = req.call(el);
+        const lock = () => {
+          if (screen.orientation && screen.orientation.lock) {
+            screen.orientation.lock("landscape").catch(() => {});
+          }
+        };
+        if (p && p.then) p.then(lock).catch(() => {}); else lock();
+      } catch (e) { /* unsupported — ignore */ }
+    }
+    setTimeout(fitCanvas, 300);
+  }
+
   const GRAVITY = 0.6;
   const MAX_FALL = 14;
   const MOVE_SPEED = 4.2;
@@ -50,6 +84,8 @@
     switch (action) {
       case "left":  keys["a"] = down; break;
       case "right": keys["d"] = down; break;
+      case "up":    keys["w"] = down; if (down) pressed["w"] = true; break;   // climb up / (also jump-buffer)
+      case "down":  keys["s"] = down; break;                                   // climb down
       case "shoot": keys["j"] = down; break;
       case "bomb":
         keys["k"] = down;
@@ -109,6 +145,11 @@
     muteBtn.addEventListener("click", (e) => { e.preventDefault(); Sfx.unlock(); doToggleMute(); });
   }
   window.addEventListener("keydown", (e) => { if (normKey(e.key) === "m") doToggleMute(); });
+
+  const fsBtn = document.getElementById("fs-btn");
+  if (fsBtn) {
+    fsBtn.addEventListener("click", (e) => { e.preventDefault(); enterFullscreenLandscape(); });
+  }
 
   function normKey(k) {
     if (k === " ") return "space";
@@ -1718,6 +1759,8 @@
     hideMessage();
     Sfx.unlock();      // resume AudioContext on this user gesture
     Sfx.startMusic();
+    enterFullscreenLandscape(); // try to go fullscreen + lock landscape on phones
+    fitCanvas();
   }
 
   // Initial menu

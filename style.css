@@ -1,48 +1,52 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body { height: 100%; }
+html, body { height: 100%; width: 100%; overflow: hidden; }
 
 body {
-  background: #0b0d16;
+  background: #05060b;
   color: #e8ecf5;
   font-family: "Segoe UI", system-ui, sans-serif;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 100vh;
-  /* prevent pull-to-refresh / rubber-banding while playing on mobile */
   overscroll-behavior: none;
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
 }
 
+/* The wrapper fills the viewport; the canvas is centered and scaled by JS
+   to fit inside without cropping (letterboxed). */
 #game-wrap {
   position: relative;
-  width: 960px;
-  max-width: 100vw;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;               /* dynamic viewport height on mobile */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
 canvas {
   display: block;
-  width: 100%;
-  height: auto;
   background: #10131f;
-  border: 2px solid #2a2f45;
-  border-radius: 8px;
+  border-radius: 6px;
   image-rendering: pixelated;
   touch-action: none;
+  /* width/height are set by JS (fitCanvas) to preserve aspect ratio */
 }
 
 .overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(8, 10, 18, 0.82);
-  border-radius: 8px;
+  background: rgba(8, 10, 18, 0.9);
   backdrop-filter: blur(2px);
+  z-index: 20;
+  padding: 16px;
 }
 
 .overlay.hidden { display: none; }
@@ -93,35 +97,52 @@ button:active { transform: translateY(0); }
 b { color: #e8ecf5; }
 
 /* ---------- On-screen touch controls ---------- */
+/* Fixed to the viewport so they sit in the bottom corners (in the
+   letterbox margins), never covering the center of the play area. */
 #touch-controls {
-  position: absolute;
+  position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  padding: 12px 14px;
-  pointer-events: none; /* only the buttons capture touches */
+  padding: 10px 12px;
+  pointer-events: none;   /* only the buttons capture touches */
+  z-index: 15;
 }
 
 #touch-controls.hidden { display: none; }
 
 .pad {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   pointer-events: auto;
 }
+/* Left pad = a compact d-pad grid (up on top row; left/down/right below). */
+.pad-left {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  grid-template-areas:
+    ".    up    ."
+    "left down right";
+  gap: 6px;
+  align-items: end;
+}
+.pad-left [data-key="up"]    { grid-area: up; }
+.pad-left [data-key="left"]  { grid-area: left; }
+.pad-left [data-key="down"]  { grid-area: down; }
+.pad-left [data-key="right"] { grid-area: right; }
 .pad-right { align-items: flex-end; }
 
 .tbtn {
-  width: 68px;
-  height: 68px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  background: rgba(30, 34, 55, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  background: rgba(30, 34, 55, 0.5);
   color: #fff;
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 700;
   padding: 0;
   display: flex;
@@ -133,25 +154,61 @@ b { color: #e8ecf5; }
 }
 .tbtn:active,
 .tbtn.pressed {
-  background: rgba(255, 92, 138, 0.75);
-  transform: scale(0.92);
+  background: rgba(255, 92, 138, 0.8);
+  transform: scale(0.9);
 }
-.tbtn-jump  { width: 82px; height: 82px; font-size: 34px; }
-.tbtn-shoot { background: rgba(120, 30, 40, 0.6); }
+.tbtn-jump  { width: 60px; height: 60px; font-size: 26px; }
+.tbtn-shoot { background: rgba(120, 30, 40, 0.55); }
+.tbtn-bomb  { background: rgba(60, 50, 20, 0.55); }
 
-/* Show touch controls on touch-capable / small screens.
-   Also toggled on via JS when a touch is detected. */
+/* Slightly larger touch targets on bigger screens */
+@media (min-width: 700px) and (pointer: coarse) {
+  .tbtn { width: 62px; height: 62px; font-size: 24px; }
+  .tbtn-jump { width: 72px; height: 72px; font-size: 30px; }
+}
+
+/* Show touch controls on touch-capable devices (JS also reveals on touch). */
 @media (hover: none) and (pointer: coarse) {
   #touch-controls:not(.force-hidden) { display: flex; }
 }
 
+/* ---------- Rotate-to-landscape prompt (portrait only) ---------- */
+#rotate-prompt {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 18px;
+  background: #06070d;
+  color: #e8ecf5;
+  z-index: 50;
+  text-align: center;
+  padding: 24px;
+}
+#rotate-prompt .phone {
+  font-size: 64px;
+  animation: rotatehint 1.8s ease-in-out infinite;
+}
+#rotate-prompt h2 { color: #ff5c8a; font-size: 22px; }
+#rotate-prompt p { color: #c3c9dc; font-size: 15px; max-width: 320px; line-height: 1.5; }
+@keyframes rotatehint {
+  0%, 40% { transform: rotate(0deg); }
+  60%, 100% { transform: rotate(-90deg); }
+}
+/* Show the rotate prompt only in portrait on touch devices. */
+@media (orientation: portrait) and (pointer: coarse) {
+  #rotate-prompt { display: flex; }
+}
+
 /* Landscape phones: keep the panels readable */
 @media (max-width: 900px) {
-  .panel { padding: 22px 20px; max-width: 92vw; }
-  .panel h1 { font-size: 26px; }
-  .panel h2 { font-size: 20px; }
-  .panel p { font-size: 14px; }
-  .controls-help { display: none; } /* not useful on touch devices */
+  .panel { padding: 18px 18px; max-width: 92vw; max-height: 88vh; overflow-y: auto; }
+  .panel h1 { font-size: 22px; }
+  .panel h2 { font-size: 18px; }
+  .panel p { font-size: 13px; margin-bottom: 12px; }
+  .controls-help { display: none; }
 }
 
 /* ---------- Mute toggle ---------- */
@@ -172,6 +229,23 @@ b { color: #e8ecf5; }
 }
 #mute-btn:hover { background: rgba(40, 46, 74, 0.8); transform: none; }
 
+#fs-btn {
+  position: absolute;
+  top: 10px;
+  right: 58px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(20, 24, 40, 0.6);
+  color: #fff;
+  cursor: pointer;
+  z-index: 5;
+}
+#fs-btn:hover { background: rgba(40, 46, 74, 0.8); transform: none; }
+
 /* ---------- Clue puzzle on the riddle panel ---------- */
 .clue-caption {
   font-size: 13px !important;
@@ -188,4 +262,3 @@ b { color: #e8ecf5; }
   border: 1px solid #3a4166;
   border-radius: 8px;
 }
-.tbtn-bomb { background: rgba(60, 50, 20, 0.6); }

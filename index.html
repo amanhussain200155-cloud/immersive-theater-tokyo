@@ -11,16 +11,19 @@
     <canvas id="game" width="960" height="540"></canvas>
 
     <button id="mute-btn" aria-label="Toggle sound">🔊</button>
+    <button id="fs-btn" aria-label="Fullscreen">⛶</button>
 
     <!-- On-screen touch controls (mobile) -->
     <div id="touch-controls" class="hidden">
       <div class="pad pad-left">
+        <button class="tbtn" data-key="up"    aria-label="Up / climb">▲</button>
         <button class="tbtn" data-key="left"  aria-label="Move left">◀</button>
+        <button class="tbtn" data-key="down"  aria-label="Down / climb">▼</button>
         <button class="tbtn" data-key="right" aria-label="Move right">▶</button>
       </div>
       <div class="pad pad-right">
-        <button class="tbtn tbtn-bomb"  data-key="bomb"  aria-label="Throw bomb">💣</button>
         <button class="tbtn tbtn-shoot" data-key="shoot" aria-label="Shoot">🔫</button>
+        <button class="tbtn tbtn-bomb"  data-key="bomb"  aria-label="Throw bomb">💣</button>
         <button class="tbtn tbtn-jump"  data-key="jump"  aria-label="Jump">⤒</button>
       </div>
     </div>
@@ -55,6 +58,13 @@
         </p>
       </div>
     </div>
+  </div>
+
+  <!-- Portrait rotate prompt (CSS shows it only in portrait on touch devices) -->
+  <div id="rotate-prompt">
+    <div class="phone">📱</div>
+    <h2>Please rotate your phone</h2>
+    <p>Immersive Theater Tokyo plays best in landscape. Turn your device sideways to start.</p>
   </div>
 
   <script src="game.js"></script>

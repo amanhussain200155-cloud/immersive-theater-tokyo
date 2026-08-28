@@ -122,17 +122,17 @@
 
   if (touchControls) {
     touchControls.querySelectorAll(".tbtn").forEach(bindTouchButton);
-    // Reveal the controls the moment we see a touch, regardless of CSS media.
     function revealTouch() {
       touchControls.classList.remove("hidden");
-      window.removeEventListener("touchstart", revealTouch);
     }
+    // Reveal on any touch/pointer interaction.
     window.addEventListener("touchstart", revealTouch, { passive: true });
-    // Also reveal immediately on coarse-pointer / touch-capable devices.
-    if (("ontouchstart" in window) ||
-        (navigator.maxTouchPoints && navigator.maxTouchPoints > 0)) {
-      touchControls.classList.remove("hidden");
-    }
+    window.addEventListener("pointerdown", revealTouch, { passive: true });
+    // Reveal immediately on touch-capable / coarse-pointer devices.
+    const isTouch = ("ontouchstart" in window) ||
+        (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) ||
+        (window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+    if (isTouch) revealTouch();
   }
 
   // ---- Mute toggle (button + 'M' key) ----
@@ -1125,9 +1125,10 @@
 
   // ===== BIRTHDAY MESSAGE =====
   const BIRTHDAY_NAME = "Risa-san";
-  const BIRTHDAY_MESSAGE = "Happy Birthday Risa-san. You brought the house down at the immersive theater " +
-    "and cleared the operation. This little show was staged for you. Thank you for always answering " +
-    "all my questions. Wish you all the happiness! Have a very happy birthday!";
+  const BIRTHDAY_MESSAGE = "Happy Birthday Risa-san! You brought the house down at the immersive theater " +
+    "and cleared the operation. Nice spy work and action there agent. Thank you for always answering " +
+    "all my questions, even the stupid ones, and being patient with me and understanding my bad Japanese. " +
+    "I wish you a very happy birthday, hope all your wishes come true!";
 
   function onGameWin() {
     state.mode = "win";

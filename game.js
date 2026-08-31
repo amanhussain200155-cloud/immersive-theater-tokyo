@@ -31,11 +31,14 @@
   window.addEventListener("orientationchange", () => setTimeout(fitCanvas, 200));
   fitCanvas();
 
-  // Tap/click during the celebration cutscene skips ahead to the message.
+  // Tap/click during a cutscene skips ahead.
   function celebrationTapSkip(e) {
     if (state.mode === "celebration" && !party.candlesLit && (state.celebrationTimer - party.blewAt) > 120) {
       if (e) e.preventDefault();
       pressed["celebrationSkip"] = true;
+    } else if (state.mode === "transition") {
+      if (e) e.preventDefault();
+      pressed["transSkip"] = true;
     }
   }
   canvas.addEventListener("click", celebrationTapSkip);
@@ -338,6 +341,7 @@
         if (ctxA.state === "suspended") ctxA.resume();
       },
       shoot()     { tone(880, 0.09, "square", 0.16, 220); },
+      bikeRev()   { tone(90, 0.5, "sawtooth", 0.12, 150); setTimeout(()=>tone(110, 0.6, "sawtooth", 0.12, 180), 200); },
       jump()      { tone(360, 0.16, "square", 0.18, 720); },
       hit()       { tone(760, 0.07, "sine", 0.10, 620); },   // soft, pleasant blip
       enemyDown() { tone(520, 0.14, "sine", 0.13, 300); setTimeout(() => tone(330, 0.16, "sine", 0.11), 70); }, // gentle two-note fall
@@ -473,6 +477,7 @@
     shieldTimer: 0,        // frames of shield protection remaining
     coyote: 0,       // frames since last grounded (for coyote-time jumps)
     jumpBuffer: 0,   // frames since jump was pressed (for buffered jumps)
+    spin: 0,         // somersault rotation (radians) while airborne
     reset(spawn) {
       this.x = spawn.x; this.y = spawn.y;
       this.vx = 0; this.vy = 0;
@@ -481,6 +486,7 @@
       this.bombCooldown = 0; this.webCooldown = 0;
       this.hasShield = false; this.shieldTimer = 0;
       this.coyote = 0; this.jumpBuffer = 0;
+      this.spin = 0;
       this.facing = 1;
     }
   };
@@ -850,6 +856,18 @@
     if (player.onGround) player.coyote = COYOTE_FRAMES;
     else if (player.coyote > 0) player.coyote--;
 
+    // Acrobatic somersault: spin through the air while off the ground, then
+    // settle upright once she lands.
+    if (!player.onGround) {
+      player.spin += player.facing * 0.28;   // flip in the facing direction
+    } else if (player.spin !== 0) {
+      // ease the remaining rotation back to upright quickly on landing
+      const twoPi = Math.PI * 2;
+      player.spin %= twoPi;
+      if (Math.abs(player.spin) < 0.25) player.spin = 0;
+      else player.spin -= Math.sign(player.spin) * 0.35;
+    }
+
     // World bounds
     if (player.x < 0) player.x = 0;
     if (player.x + player.w > level.worldW) player.x = level.worldW - player.w;
@@ -1164,19 +1182,25 @@
       if (e.x < e.patrol[0]) { e.x = e.patrol[0]; e.dir = 1; }
       if (e.x > e.patrol[1]) { e.x = e.patrol[1]; e.dir = -1; }
 
-      // Face the player if in range and shoot
-      const dx = (player.x) - e.x;
-      const dist = Math.abs(dx);
-      if (dist < 460) {
-        e.dir = dx > 0 ? 1 : -1;
+      // Detect the player in range, face them, and shoot AT them (any angle).
+      const ex = e.x + e.w / 2, ey = e.y + 12;
+      const pdx = (player.x + player.w / 2) - ex;
+      const pdy = (player.y + player.h / 2) - ey;
+      const dist = Math.hypot(pdx, pdy);
+      if (dist < 480) {
+        e.dir = pdx > 0 ? 1 : -1;
         e.shootTimer--;
         if (e.shootTimer <= 0) {
+          const sp = 5.0;                    // slightly slower than before (fairness)
+          const len = dist || 1;
           enemyBullets.push({
-            x: e.dir > 0 ? e.x + e.w : e.x - 6,
-            y: e.y + 12, w: 7, h: 4,
-            vx: e.dir * 5.5,
+            x: ex + (pdx / len) * 12,
+            y: ey + (pdy / len) * 12,
+            w: 7, h: 5,
+            vx: (pdx / len) * sp,
+            vy: (pdy / len) * sp,
           });
-          e.shootTimer = 90 + Math.random() * 70;
+          e.shootTimer = 100 + Math.random() * 80; // a touch slower fire rate
         }
       }
 
@@ -1494,8 +1518,43 @@
       onGameWin();
       return;
     }
-    loadLevel(state.levelIndex);
+    // Play the bike-ride transition, then load the next level.
+    startTransition(state.levelIndex);
+  }
+
+  // ----- Bike-ride transition between levels -----
+  const bike = { x: -160, phase: "ride", timer: 0, nextIndex: 0, spyOff: false };
+  function startTransition(nextIndex) {
+    state.mode = "transition";
+    bike.x = -160;
+    bike.phase = "ride";     // ride -> brake -> dismount -> done
+    bike.timer = 0;
+    bike.nextIndex = nextIndex;
+    bike.spyOff = false;
+    if (touchControls) touchControls.classList.add("force-hidden");
+    Sfx.bikeRev && Sfx.bikeRev();
+  }
+  function finishTransition() {
+    if (touchControls) touchControls.classList.remove("force-hidden");
+    loadLevel(bike.nextIndex);
     state.mode = "play";
+  }
+  function updateTransition() {
+    bike.timer++;
+    const brakeX = W / 2 - 30;
+    if (bike.phase === "ride") {
+      bike.x += 7;
+      if (bike.x >= brakeX) { bike.x = brakeX; bike.phase = "brake"; bike.timer = 0; }
+    } else if (bike.phase === "brake") {
+      if (bike.timer > 40) { bike.phase = "dismount"; bike.timer = 0; }
+    } else if (bike.phase === "dismount") {
+      bike.spyOff = true;
+      if (bike.timer > 70) { bike.phase = "done"; bike.timer = 0; }
+    } else { // done — hold a beat, then continue (or tap to skip)
+      if (bike.timer > 40 || consume("space") || consume("celebrationSkip")) finishTransition();
+    }
+    // allow tap-skip any time after a moment
+    if (bike.timer > 8 && (consume("space") || consume("transSkip"))) finishTransition();
   }
 
   // ---------------------------------------------------------------------
@@ -1758,6 +1817,118 @@
     ctx.beginPath(); ctx.moveTo(x + w, y + 22); ctx.lineTo(x + w + 8, y + 12 + wave); ctx.stroke();
   }
 
+  // ----- Bike transition scene -----
+  function drawTransition() {
+    const t = state.time;
+    // night-road backdrop with a gradient sky
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#0e1430"); g.addColorStop(1, "#241a3a");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // moon
+    ctx.fillStyle = "#ffe1b0";
+    ctx.beginPath(); ctx.arc(W - 130, 90, 30, 0, Math.PI * 2); ctx.fill();
+    // parallax neon skyline (scrolls left)
+    const off = (t * 6) % 150;
+    const neon = ["#ff5c8a", "#6cc7ff", "#ffd166", "#8b5cff"];
+    for (let i = -1; i < W / 150 + 2; i++) {
+      const bx = i * 150 - off;
+      const bh = 90 + ((i * 61) % 120);
+      ctx.fillStyle = "#161028";
+      ctx.fillRect(bx, 300 - bh, 110, bh);
+      for (let wy = 300 - bh + 10; wy < 296; wy += 16) {
+        ctx.fillStyle = neon[(i + wy) % neon.length]; ctx.globalAlpha = 0.5;
+        ctx.fillRect(bx + 8, wy, 84, 3); ctx.globalAlpha = 1;
+      }
+    }
+    // road
+    ctx.fillStyle = "#20242f"; ctx.fillRect(0, 380, W, H - 380);
+    ctx.fillStyle = "#3a4152"; ctx.fillRect(0, 380, W, 5);
+    // dashed lane markings (scroll fast to sell speed while riding)
+    ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 5;
+    const dashOff = bike.phase === "ride" ? (t * 16) % 90 : (t * 3) % 90;
+    ctx.setLineDash([40, 50]); ctx.lineDashOffset = -dashOff;
+    ctx.beginPath(); ctx.moveTo(0, 452); ctx.lineTo(W, 452); ctx.stroke();
+    ctx.setLineDash([]);
+
+    const roadY = 430;                 // wheels rest here
+    if (!bike.spyOff) {
+      // riding: bike + spy on top, with speed lines while moving
+      if (bike.phase === "ride") {
+        ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 2;
+        for (let i = 0; i < 6; i++) { const ly = 360 + i * 14; ctx.beginPath(); ctx.moveTo(bike.x - 40 - i * 20, ly); ctx.lineTo(bike.x - 10 - i * 20, ly); ctx.stroke(); }
+      }
+      drawMotorbike(bike.x, roadY, true);
+    } else {
+      // dismounted: bike parked, spy standing beside it
+      drawMotorbike(bike.x, roadY, false);
+      drawPartyPerson(bike.x + 66, roadY, "#20243b", "#5b3a1e", false, t, true, true);
+    }
+
+    // caption
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(10,8,20,0.55)";
+    ctx.fillRect(W / 2 - 200, 60, 400, 44);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 22px Segoe UI, sans-serif";
+    const dest = (levels[bike.nextIndex] && levels[bike.nextIndex].name) ? levels[bike.nextIndex].name.split(" — ")[0] : "the next stage";
+    ctx.fillText("Riding to " + dest + "…", W / 2, 90);
+    if (bike.timer > 20 || bike.phase !== "ride") {
+      ctx.fillStyle = "rgba(255,255,255," + (0.4 + 0.4 * Math.sin(t * 0.1)) + ")";
+      ctx.font = "13px Segoe UI, sans-serif";
+      ctx.fillText("tap to skip", W / 2, H - 24);
+    }
+    ctx.textAlign = "left";
+  }
+
+  // A detailed side-view motorbike; if `rider`, the spy sits on it.
+  function drawMotorbike(bx, roadY, rider) {
+    const wheelR = 22;
+    const backWx = bx, frontWx = bx + 96;
+    const wy = roadY - wheelR;
+    const spin = state.time * 0.5;
+    // wheels (tyre + hub + spokes)
+    for (const wx of [backWx, frontWx]) {
+      ctx.fillStyle = "#111"; ctx.beginPath(); ctx.arc(wx, wy, wheelR, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#2a2f3e"; ctx.beginPath(); ctx.arc(wx, wy, wheelR - 5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#8a90a6"; ctx.lineWidth = 2;
+      for (let k = 0; k < 6; k++) {
+        const a = spin + k * Math.PI / 3;
+        ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx + Math.cos(a) * (wheelR - 6), wy + Math.sin(a) * (wheelR - 6)); ctx.stroke();
+      }
+      ctx.fillStyle = "#c9ccd8"; ctx.beginPath(); ctx.arc(wx, wy, 3, 0, Math.PI * 2); ctx.fill();
+    }
+    // frame + body (sporty red motorbike)
+    ctx.strokeStyle = "#8a90a6"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(backWx, wy); ctx.lineTo(bx + 40, wy - 20); ctx.lineTo(frontWx, wy); ctx.stroke(); // swingarm/forks
+    ctx.fillStyle = "#d33341";
+    ctx.beginPath();
+    ctx.moveTo(bx + 20, wy - 14);
+    ctx.lineTo(bx + 70, wy - 14);
+    ctx.lineTo(bx + 62, wy - 30);
+    ctx.lineTo(bx + 30, wy - 30);
+    ctx.closePath(); ctx.fill();          // fuel tank / body
+    ctx.fillStyle = "#b0202e";
+    ctx.fillRect(bx + 60, wy - 16, 22, 8); // seat cowl
+    // seat
+    ctx.fillStyle = "#1c1e28"; ctx.fillRect(bx + 34, wy - 22, 30, 6);
+    // handlebars + headlight (front)
+    ctx.strokeStyle = "#8a90a6"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(frontWx - 6, wy - 6); ctx.lineTo(bx + 78, wy - 30); ctx.stroke();
+    ctx.fillStyle = "#ffe9a8"; ctx.beginPath(); ctx.arc(bx + 82, wy - 30, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "rgba(255,233,168,0.5)"; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(bx + 86, wy - 30); ctx.lineTo(bx + 130, wy - 22); ctx.stroke(); // headlight beam
+    // exhaust + little puff
+    ctx.fillStyle = "#6a6f80"; ctx.fillRect(bx - 8, wy + 6, 22, 6);
+    ctx.fillStyle = "rgba(200,200,210,0.4)";
+    const pu = (state.time * 2) % 20;
+    ctx.beginPath(); ctx.arc(bx - 14 - pu, wy + 6, 4 + pu * 0.2, 0, Math.PI * 2); ctx.fill();
+
+    if (rider) {
+      // spy leaning forward on the bike (seat at ~wy-22)
+      drawPartyPerson(bx + 34, wy - 4, "#20243b", "#5b3a1e", false, state.time, true, true);
+    }
+  }
+
   const BIRTHDAY_MESSAGE = "Happy Birthday Risa-san! You brought the house down at the immersive theater " +
     "and cleared the operation. Nice spy work and action there agent. Thank you for always answering " +
     "all my questions, even the stupid ones, and being patient with me and understanding my bad Japanese. " +
@@ -1983,6 +2154,15 @@
     if (player.invuln > 0 && Math.floor(state.time / 4) % 2 === 0) return; // blink
     const px = player.x, py = player.y;
 
+    // Somersault: rotate the whole spy around her centre while airborne.
+    const spinning = player.spin !== 0;
+    if (spinning) {
+      ctx.save();
+      ctx.translate(px + player.w / 2, py + player.h / 2);
+      ctx.rotate(player.spin);
+      ctx.translate(-(px + player.w / 2), -(py + player.h / 2));
+    }
+
     // body (spy suit)
     ctx.fillStyle = "#20243b";
     ctx.fillRect(px, py + 12, player.w, player.h - 12);
@@ -2017,6 +2197,8 @@
     ctx.lineTo(gx + ax * 90, gy + ay * 90);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    if (spinning) ctx.restore();   // end somersault rotation (shield stays upright)
 
     // Shield bubble
     if (player.hasShield) {
@@ -2467,6 +2649,12 @@
       updateWeb();
       updateClues();
       updateCamera();
+    }
+    if (state.mode === "transition") {
+      updateTransition();
+      drawTransition();
+      requestAnimationFrame(loop);
+      return;
     }
     if (state.mode === "celebration") {
       updateCelebration();

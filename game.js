@@ -1916,18 +1916,14 @@
       }
     }
 
-    // caption reflects the current stunt
+    // caption — just where she's headed (no stunt labels)
     ctx.textAlign = "center";
     ctx.fillStyle = "rgba(10,8,20,0.55)";
     ctx.fillRect(W / 2 - 210, 60, 420, 44);
     ctx.fillStyle = "#fff";
     ctx.font = "bold 22px Segoe UI, sans-serif";
     const dest = (levels[bike.nextIndex] && levels[bike.nextIndex].name) ? levels[bike.nextIndex].name.split(" — ")[0] : "the next stage";
-    let cap = "Riding to " + dest + "…";
-    if (bike.phase === "wheelie") cap = "🏍️  Wheelie!";
-    else if (bike.phase === "launch") cap = "🤸  Somersault!";
-    else if (bike.phase === "land" || bike.phase === "pose" || bike.phase === "done") cap = "Stuck the landing! 😎";
-    ctx.fillText(cap, W / 2, 90);
+    ctx.fillText("Riding to " + dest + "…", W / 2, 90);
     if (bike.timer > 20 || bike.phase !== "ride") {
       ctx.fillStyle = "rgba(255,255,255," + (0.4 + 0.4 * Math.sin(t * 0.1)) + ")";
       ctx.font = "13px Segoe UI, sans-serif";

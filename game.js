@@ -1523,14 +1523,21 @@
   }
 
   // ----- Bike-ride transition between levels -----
-  const bike = { x: -160, phase: "ride", timer: 0, nextIndex: 0, spyOff: false };
+  const bike = {
+    x: -160, phase: "ride", timer: 0, nextIndex: 0,
+    wheelie: 0,        // front-wheel lift angle (radians)
+    spyOn: true,       // spy is on the bike
+    spyX: 0, spyY: 0, spyVy: 0, spySpin: 0, // airborne stunt state
+  };
   function startTransition(nextIndex) {
     state.mode = "transition";
     bike.x = -160;
-    bike.phase = "ride";     // ride -> brake -> dismount -> done
+    bike.phase = "ride";     // ride -> wheelie -> launch -> land -> pose -> done
     bike.timer = 0;
     bike.nextIndex = nextIndex;
-    bike.spyOff = false;
+    bike.wheelie = 0;
+    bike.spyOn = true;
+    bike.spyVy = 0; bike.spySpin = 0; bike.spyYOff = 0;
     if (touchControls) touchControls.classList.add("force-hidden");
     Sfx.bikeRev && Sfx.bikeRev();
   }
@@ -1539,21 +1546,41 @@
     loadLevel(bike.nextIndex);
     state.mode = "play";
   }
+  const BIKE_ROAD_Y = 430;
   function updateTransition() {
     bike.timer++;
-    const brakeX = W / 2 - 30;
+    const centreX = W / 2 - 30;
+
     if (bike.phase === "ride") {
-      bike.x += 7;
-      if (bike.x >= brakeX) { bike.x = brakeX; bike.phase = "brake"; bike.timer = 0; }
-    } else if (bike.phase === "brake") {
-      if (bike.timer > 40) { bike.phase = "dismount"; bike.timer = 0; }
-    } else if (bike.phase === "dismount") {
-      bike.spyOff = true;
-      if (bike.timer > 70) { bike.phase = "done"; bike.timer = 0; }
-    } else { // done — hold a beat, then continue (or tap to skip)
-      if (bike.timer > 40 || consume("space") || consume("celebrationSkip")) finishTransition();
+      // roar in from the left
+      bike.x += 8;
+      if (bike.x >= centreX) { bike.x = centreX; bike.phase = "wheelie"; bike.timer = 0; Sfx.bikeRev && Sfx.bikeRev(); }
+    } else if (bike.phase === "wheelie") {
+      // pop a wheelie (front wheel rises), hold, then drop
+      if (bike.timer < 40) bike.wheelie = Math.min(0.5, bike.wheelie + 0.03);
+      else bike.wheelie = Math.max(0, bike.wheelie - 0.03);
+      if (bike.timer > 90) { bike.phase = "launch"; bike.timer = 0; bike.wheelie = 0; bike.spyVy = -13; bike.spyOn = false; }
+    } else if (bike.phase === "launch") {
+      // spy leaps off doing a somersault; bike coasts forward a touch
+      bike.x += 1.2;
+      bike.spyVy += GRAVITY * 0.9;
+      bike.spySpin += 0.32;                 // flips through the air
+      // she lands when her feet reach the road again
+      // spyY is an offset above the road (0 = on road); integrate
+      bike.spyYOff = (bike.spyYOff || 0) + bike.spyVy;
+      if (bike.spyYOff >= 0) {              // back on the ground
+        bike.spyYOff = 0;
+        bike.spySpin = 0;
+        bike.phase = "land"; bike.timer = 0;
+      }
+    } else if (bike.phase === "land") {
+      if (bike.timer > 30) { bike.phase = "pose"; bike.timer = 0; }
+    } else if (bike.phase === "pose") {
+      if (bike.timer > 80) { bike.phase = "done"; bike.timer = 0; }
+    } else { // done — hold a beat, then continue
+      if (bike.timer > 30) finishTransition();
     }
-    // allow tap-skip any time after a moment
+    // tap-skip any time after a moment
     if (bike.timer > 8 && (consume("space") || consume("transSkip"))) finishTransition();
   }
 
@@ -1850,28 +1877,54 @@
     ctx.beginPath(); ctx.moveTo(0, 452); ctx.lineTo(W, 452); ctx.stroke();
     ctx.setLineDash([]);
 
-    const roadY = 430;                 // wheels rest here
-    if (!bike.spyOff) {
-      // riding: bike + spy on top, with speed lines while moving
-      if (bike.phase === "ride") {
-        ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 2;
-        for (let i = 0; i < 6; i++) { const ly = 360 + i * 14; ctx.beginPath(); ctx.moveTo(bike.x - 40 - i * 20, ly); ctx.lineTo(bike.x - 10 - i * 20, ly); ctx.stroke(); }
-      }
-      drawMotorbike(bike.x, roadY, true);
-    } else {
-      // dismounted: bike parked, spy standing beside it
-      drawMotorbike(bike.x, roadY, false);
-      drawPartyPerson(bike.x + 66, roadY, "#20243b", "#5b3a1e", false, t, true, true);
+    const roadY = BIKE_ROAD_Y;
+    // speed lines while roaring in
+    if (bike.phase === "ride" || bike.phase === "wheelie") {
+      ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 2;
+      for (let i = 0; i < 6; i++) { const ly = 360 + i * 14; ctx.beginPath(); ctx.moveTo(bike.x - 40 - i * 20, ly); ctx.lineTo(bike.x - 10 - i * 20, ly); ctx.stroke(); }
     }
 
-    // caption
+    if (bike.spyOn) {
+      // riding — draw the bike (with wheelie tilt) and the spy on it
+      ctx.save();
+      if (bike.wheelie > 0) {
+        // pivot the bike around the rear wheel to lift the front (wheelie)
+        ctx.translate(bike.x, roadY - 22);
+        ctx.rotate(-bike.wheelie);
+        ctx.translate(-bike.x, -(roadY - 22));
+      }
+      drawMotorbike(bike.x, roadY, true);
+      ctx.restore();
+    } else {
+      // spy has launched off — bike coasts (no rider), spy is airborne/landed
+      drawMotorbike(bike.x, roadY, false);
+      const spyX = bike.x + 30;
+      const spyFeetY = roadY + (bike.spyYOff || 0);   // spyYOff<=0 while airborne
+      if (bike.phase === "launch" && bike.spySpin !== 0) {
+        // somersaulting through the air
+        ctx.save();
+        const cx = spyX + 11, cy = spyFeetY - 30;
+        ctx.translate(cx, cy); ctx.rotate(bike.spySpin); ctx.translate(-cx, -cy);
+        drawPartyPerson(spyX, spyFeetY, "#20243b", "#5b3a1e", false, t, true, true);
+        ctx.restore();
+      } else {
+        // landed / posing on the road
+        drawPartyPerson(spyX, spyFeetY, "#20243b", "#5b3a1e", false, t, true, true);
+      }
+    }
+
+    // caption reflects the current stunt
     ctx.textAlign = "center";
     ctx.fillStyle = "rgba(10,8,20,0.55)";
-    ctx.fillRect(W / 2 - 200, 60, 400, 44);
+    ctx.fillRect(W / 2 - 210, 60, 420, 44);
     ctx.fillStyle = "#fff";
     ctx.font = "bold 22px Segoe UI, sans-serif";
     const dest = (levels[bike.nextIndex] && levels[bike.nextIndex].name) ? levels[bike.nextIndex].name.split(" — ")[0] : "the next stage";
-    ctx.fillText("Riding to " + dest + "…", W / 2, 90);
+    let cap = "Riding to " + dest + "…";
+    if (bike.phase === "wheelie") cap = "🏍️  Wheelie!";
+    else if (bike.phase === "launch") cap = "🤸  Somersault!";
+    else if (bike.phase === "land" || bike.phase === "pose" || bike.phase === "done") cap = "Stuck the landing! 😎";
+    ctx.fillText(cap, W / 2, 90);
     if (bike.timer > 20 || bike.phase !== "ride") {
       ctx.fillStyle = "rgba(255,255,255," + (0.4 + 0.4 * Math.sin(t * 0.1)) + ")";
       ctx.font = "13px Segoe UI, sans-serif";

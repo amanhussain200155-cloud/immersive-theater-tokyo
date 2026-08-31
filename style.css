@@ -126,10 +126,12 @@ b { color: #e8ecf5; }
   gap: 10px;
   pointer-events: auto;
 }
-.pad-left  { align-items: flex-end; }
+.pad-left  { align-items: flex-end; flex-direction: column; gap: 8px; }
 .pad-right { align-items: flex-end; gap: 40px; }   /* big gap between bomb and the rest */
 .subpad { display: flex; gap: 10px; align-items: flex-end; pointer-events: auto; }
 .subpad-bomb { align-self: flex-start; }           /* raise the bomb up a bit too */
+.subpad-melee { justify-content: flex-start; }     /* punch/kick sit above the arrows */
+.tbtn-melee { width: 44px; height: 44px; font-size: 18px; background: rgba(80, 40, 30, 0.28); }
 
 /* Aim buttons (shoot/bomb/web) are drag-to-aim; let them capture drags. */
 .aimbtn { touch-action: none; }

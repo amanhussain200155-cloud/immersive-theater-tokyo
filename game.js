@@ -101,6 +101,8 @@
     switch (action) {
       case "left":  keys["a"] = down; break;
       case "right": keys["d"] = down; break;
+      case "punch": keys["p"] = down; if (down) pressed["p"] = true; break; // one-shot punch
+      case "kick":  keys["o"] = down; if (down) pressed["o"] = true; break; // one-shot kick
       case "shoot": keys["j"] = down; break;
       case "web":
         keys["l"] = down;
@@ -439,6 +441,8 @@
   const SHOOT = () => keys["j"] || keys["f"];
   const BOMB  = () => consume("k") || consume("b");
   const WEB   = () => consume("l") || consume("g");
+  const PUNCH = () => consume("p");
+  const KICK  = () => consume("o");
 
   // ---------------------------------------------------------------------
   // Geometry helpers
@@ -472,6 +476,9 @@
     shootCooldown: 0,
     bombCooldown: 0,
     webCooldown: 0,
+    meleeCooldown: 0,
+    meleeTimer: 0,      // frames the melee animation is showing
+    meleeType: null,    // 'punch' | 'kick'
     invuln: 0,
     hasShield: false,      // picked up the shield on the boss level (permanent for the level)
     shieldTimer: 0,        // frames of shield protection remaining
@@ -484,6 +491,7 @@
       this.onGround = false;
       this.hp = this.maxHp; this.invuln = 0; this.shootCooldown = 0;
       this.bombCooldown = 0; this.webCooldown = 0;
+      this.meleeCooldown = 0; this.meleeTimer = 0; this.meleeType = null;
       this.hasShield = false; this.shieldTimer = 0;
       this.coyote = 0; this.jumpBuffer = 0;
       this.spin = 0;
@@ -928,6 +936,14 @@
       player.webCooldown = 40;
     }
 
+    // Melee — punch (fast, light) or kick (slower, stronger + knockback).
+    if (player.meleeCooldown > 0) player.meleeCooldown--;
+    if (player.meleeTimer > 0) player.meleeTimer--;
+    if (player.meleeCooldown === 0) {
+      if (PUNCH()) doMelee("punch");
+      else if (KICK()) doMelee("kick");
+    }
+
     if (player.invuln > 0) player.invuln--;
 
     // Reach goal -> riddle gate (only once all clue pieces are collected).
@@ -963,6 +979,41 @@
   const WEB_RANGE = 340;
   const WEB_DAMAGE = 14;
   const WEB_STUN = 70;      // frames the target is stunned after being pulled
+
+  // Close-range melee: a hit box just in front of the spy. Punch is fast +
+  // light; kick is slower + stronger with knockback.
+  function doMelee(type) {
+    const isKick = type === "kick";
+    player.meleeType = type;
+    player.meleeTimer = isKick ? 14 : 10;
+    player.meleeCooldown = isKick ? 34 : 20;
+    const dmg = isKick ? 24 : 14;
+    const reach = isKick ? 34 : 26;
+    // hit box extends in front of the spy in her facing direction
+    const hx = player.facing > 0 ? player.x + player.w : player.x - reach;
+    const box = { x: hx, y: player.y + 6, w: reach, h: player.h - 8 };
+    Sfx.jump(); // a soft "whoosh" for the swing
+    let connected = false;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (rectsOverlap(box, e)) {
+        e.hp -= dmg; e.hitFlash = 6; e.showHp = 120;
+        if (isKick) { e.x += player.facing * 46; e.stun = 40; e.vy = -3; } // knockback + hop
+        if (e.hp <= 0) { e.alive = false; Sfx.enemyDown(); dropClue(e); }
+        else Sfx.hit();
+        connected = true;
+      }
+    }
+    if (boss && boss.alive && rectsOverlap(box, boss)) {
+      const armored = (boss.dashing > 0 || boss.windup > 0);
+      boss.hp -= armored ? Math.round(dmg * 0.3) : dmg;
+      boss.hitFlash = 5; Sfx.hit();
+      if (isKick && !armored) boss.x += player.facing * 24;
+      if (boss.hp <= 0) { boss.hp = 0; boss.alive = false; onBossDefeated(); }
+      connected = true;
+    }
+    return connected;
+  }
 
   function throwWeb() {
     Sfx.shoot(); // a quick "thwip"
@@ -2252,6 +2303,35 @@
     ctx.lineTo(gx + ax * 90, gy + ay * 90);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    // Melee animation — a fist jab (punch) or leg kick in the facing direction.
+    if (player.meleeTimer > 0) {
+      const dir = player.facing;
+      const ox = dir > 0 ? px + player.w : px;
+      if (player.meleeType === "kick") {
+        // extended leg
+        ctx.strokeStyle = "#20243b"; ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(px + player.w / 2, py + 30);
+        ctx.lineTo(ox + dir * 22, py + 34);
+        ctx.stroke();
+        ctx.fillStyle = "#1c1e28";           // shoe
+        ctx.fillRect(ox + dir * 18, py + 30, 8, 8);
+      } else {
+        // punching arm + fist
+        ctx.strokeStyle = "#20243b"; ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(px + player.w / 2, py + 18);
+        ctx.lineTo(ox + dir * 16, py + 18);
+        ctx.stroke();
+        ctx.fillStyle = "#e8c7a0";           // fist
+        ctx.beginPath(); ctx.arc(ox + dir * 20, py + 18, 5, 0, Math.PI * 2); ctx.fill();
+      }
+      // little impact spark
+      ctx.fillStyle = "rgba(255,220,120,0.8)";
+      const sx = ox + dir * (player.meleeType === "kick" ? 26 : 24);
+      ctx.beginPath(); ctx.arc(sx, py + (player.meleeType === "kick" ? 32 : 18), 3, 0, Math.PI * 2); ctx.fill();
+    }
 
     if (spinning) ctx.restore();   // end somersault rotation (shield stays upright)
 

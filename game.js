@@ -1537,7 +1537,7 @@
     bike.nextIndex = nextIndex;
     bike.wheelie = 0;
     bike.spyOn = true;
-    bike.spyVy = 0; bike.spySpin = 0; bike.spyYOff = 0;
+    bike.spyVy = 0; bike.spySpin = 0; bike.spyYOff = 0; bike.launchX = null;
     if (touchControls) touchControls.classList.add("force-hidden");
     Sfx.bikeRev && Sfx.bikeRev();
   }
@@ -1559,14 +1559,12 @@
       // pop a wheelie (front wheel rises), hold, then drop
       if (bike.timer < 40) bike.wheelie = Math.min(0.5, bike.wheelie + 0.03);
       else bike.wheelie = Math.max(0, bike.wheelie - 0.03);
-      if (bike.timer > 90) { bike.phase = "launch"; bike.timer = 0; bike.wheelie = 0; bike.spyVy = -13; bike.spyOn = false; }
+      if (bike.timer > 90) { bike.phase = "launch"; bike.timer = 0; bike.wheelie = 0; bike.spyVy = -13; bike.spyOn = false; bike.launchX = bike.x + 30; }
     } else if (bike.phase === "launch") {
-      // spy leaps off doing a somersault; bike coasts forward a touch
-      bike.x += 1.2;
+      // spy leaps STRAIGHT UP off the bike in a somersault; the parked bike
+      // stays put (so she clearly jumps, not falls off).
       bike.spyVy += GRAVITY * 0.9;
       bike.spySpin += 0.32;                 // flips through the air
-      // she lands when her feet reach the road again
-      // spyY is an offset above the road (0 = on road); integrate
       bike.spyYOff = (bike.spyYOff || 0) + bike.spyVy;
       if (bike.spyYOff >= 0) {              // back on the ground
         bike.spyYOff = 0;
@@ -1794,7 +1792,7 @@
 
   // A little party character with feet planted at feetY. Females get a
   // skirt/dress + longer hair; the spy gets a ponytail + pink belt.
-  function drawPartyPerson(x, feetY, color, hair, tall, t, isSpy, female) {
+  function drawPartyPerson(x, feetY, color, hair, tall, t, isSpy, female, noWave) {
     const bodyH = tall ? 54 : 46;   // head+torso height
     const legH = 18;
     const w = 22;
@@ -1839,9 +1837,14 @@
     }
 
     // waving arm
-    const wave = Math.sin(t * 0.2 + x) * 8;
+    // arm — a static arm during action (bike stunts); a friendly wave otherwise
     ctx.strokeStyle = color; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(x + w, y + 22); ctx.lineTo(x + w + 8, y + 12 + wave); ctx.stroke();
+    if (noWave) {
+      ctx.beginPath(); ctx.moveTo(x + w, y + 20); ctx.lineTo(x + w + 5, y + 30); ctx.stroke();
+    } else {
+      const wave = Math.sin(t * 0.2 + x) * 8;
+      ctx.beginPath(); ctx.moveTo(x + w, y + 22); ctx.lineTo(x + w + 8, y + 12 + wave); ctx.stroke();
+    }
   }
 
   // ----- Bike transition scene -----
@@ -1896,20 +1899,20 @@
       drawMotorbike(bike.x, roadY, true);
       ctx.restore();
     } else {
-      // spy has launched off — bike coasts (no rider), spy is airborne/landed
+      // spy has launched off — bike stays parked, spy leaps up & somersaults
       drawMotorbike(bike.x, roadY, false);
-      const spyX = bike.x + 30;
+      const spyX = (bike.launchX != null) ? bike.launchX : bike.x + 30;
       const spyFeetY = roadY + (bike.spyYOff || 0);   // spyYOff<=0 while airborne
       if (bike.phase === "launch" && bike.spySpin !== 0) {
-        // somersaulting through the air
+        // somersaulting through the air (no wave — she's flipping)
         ctx.save();
         const cx = spyX + 11, cy = spyFeetY - 30;
         ctx.translate(cx, cy); ctx.rotate(bike.spySpin); ctx.translate(-cx, -cy);
-        drawPartyPerson(spyX, spyFeetY, "#20243b", "#5b3a1e", false, t, true, true);
+        drawPartyPerson(spyX, spyFeetY, "#20243b", "#5b3a1e", false, t, true, true, true);
         ctx.restore();
       } else {
         // landed / posing on the road
-        drawPartyPerson(spyX, spyFeetY, "#20243b", "#5b3a1e", false, t, true, true);
+        drawPartyPerson(spyX, spyFeetY, "#20243b", "#5b3a1e", false, t, true, true, true);
       }
     }
 
@@ -1977,8 +1980,8 @@
     ctx.beginPath(); ctx.arc(bx - 14 - pu, wy + 6, 4 + pu * 0.2, 0, Math.PI * 2); ctx.fill();
 
     if (rider) {
-      // spy leaning forward on the bike (seat at ~wy-22)
-      drawPartyPerson(bx + 34, wy - 4, "#20243b", "#5b3a1e", false, state.time, true, true);
+      // spy leaning forward on the bike (seat at ~wy-22), no wave while riding
+      drawPartyPerson(bx + 34, wy - 4, "#20243b", "#5b3a1e", false, state.time, true, true, true);
     }
   }
 

@@ -39,6 +39,9 @@
     } else if (state.mode === "transition") {
       if (e) e.preventDefault();
       pressed["transSkip"] = true;
+    } else if (state.mode === "arrest" && arrest.timer > 30) {
+      if (e) e.preventDefault();
+      pressed["arrestSkip"] = true;
     }
   }
   canvas.addEventListener("click", celebrationTapSkip);
@@ -1660,8 +1663,46 @@
 
   function onBossDefeated() {
     Sfx.enemyDown();
-    // brief pause on the defeat, then show the birthday message first.
-    setTimeout(onGameWin, 700);
+    // brief pause on the defeat, then roll the arrest cutscene.
+    setTimeout(startArrest, 700);
+  }
+
+  // ----- Arrest cutscene: Tokyo police haul away the boss + guards -----
+  const arrest = { timer: 0, crooks: [], police: [], carX: -220 };
+  function startArrest() {
+    state.mode = "arrest";
+    arrest.timer = 0;
+    arrest.carX = -220;
+    // the criminals our spy fought: The Impresario (boss) + several guards
+    arrest.crooks = [
+      { x: 300, kind: "boss",  bob: 0.0 },
+      { x: 372, kind: "guard", bob: 1.0 },
+      { x: 436, kind: "guard", bob: 2.0 },
+      { x: 500, kind: "guard", bob: 0.6 },
+    ];
+    // Tokyo police escorting them
+    arrest.police = [
+      { x: 250, bob: 0.3 },
+      { x: 560, bob: 1.4 },
+    ];
+    Sfx.stopMusic();
+    Sfx.win && Sfx.win();   // a small "case closed" chime
+    if (touchControls) touchControls.classList.add("force-hidden");
+  }
+  const ARREST_LENGTH = 520; // ~8.5s
+  function updateArrest() {
+    arrest.timer++;
+    // police car rolls in and parks
+    if (arrest.carX < 60) arrest.carX += 4.5;
+    // criminals + police shuffle slowly to the right (marched off)
+    if (arrest.timer > 120) {
+      for (const c of arrest.crooks) c.x += 0.5;
+      for (const p of arrest.police) p.x += 0.5;
+    }
+    if (arrest.timer > ARREST_LENGTH || consume("space") || consume("arrestSkip")) {
+      if (touchControls) touchControls.classList.remove("force-hidden");
+      onGameWin();
+    }
   }
 
   // ----- Birthday celebration cutscene (plays AFTER the message) -----
@@ -1724,6 +1765,121 @@
       state.mode = "ended";
       showMessage("✅ Mission Complete", "Thanks for playing, agent. 🎭  The End.", null, null);
     }
+  }
+
+  // ----- Arrest cutscene rendering -----
+  function drawArrest() {
+    const t = arrest.timer;
+    // night street
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#0b1024"); g.addColorStop(1, "#1a2036");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // distant buildings
+    for (let i = 0; i < W / 120 + 1; i++) {
+      const bx = i * 120, bh = 120 + ((i * 53) % 90);
+      ctx.fillStyle = "#141a30"; ctx.fillRect(bx, 300 - bh, 96, bh);
+      ctx.fillStyle = "rgba(255,220,140,0.35)";
+      for (let wy = 300 - bh + 12; wy < 296; wy += 18) ctx.fillRect(bx + 10, wy, 70, 4);
+    }
+    // road
+    ctx.fillStyle = "#20242f"; ctx.fillRect(0, 430, W, H - 430);
+    ctx.fillStyle = "#3a4152"; ctx.fillRect(0, 430, W, 5);
+
+    const FLOOR = 470;
+    // police car (rolls in from the left) with flashing red/blue lights
+    drawPoliceCar(arrest.carX, FLOOR, t);
+    // cast a flashing tint over the scene
+    const flash = Math.floor(t / 12) % 2 === 0;
+    ctx.fillStyle = flash ? "rgba(255,60,80,0.06)" : "rgba(60,120,255,0.06)";
+    ctx.fillRect(0, 0, W, H);
+
+    // handcuffed criminals (boss + guards), heads down, shuffling
+    for (const c of arrest.crooks) {
+      const yb = FLOOR + Math.abs(Math.sin(t * 0.06 + c.bob)) * -2;
+      drawCrook(c.x, yb, c.kind, t);
+    }
+    // Tokyo police escorting them
+    for (const p of arrest.police) {
+      const yb = FLOOR + Math.abs(Math.sin(t * 0.06 + p.bob)) * -2;
+      drawPolice(p.x, yb, t);
+    }
+    // the spy stands to the right, watching (arms folded-ish, no wave)
+    drawPartyPerson(W - 120, FLOOR, "#20243b", "#5b3a1e", false, t, true, true, true);
+
+    // caption
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(10,8,20,0.6)";
+    ctx.fillRect(W / 2 - 250, 56, 500, 46);
+    ctx.fillStyle = "#cfe0ff";
+    ctx.font = "bold 20px Segoe UI, sans-serif";
+    ctx.fillText("🚔  Tokyo Police haul in The Impresario & his crew", W / 2, 86);
+    if (t > 20) {
+      ctx.fillStyle = "rgba(255,255,255," + (0.4 + 0.4 * Math.sin(t * 0.1)) + ")";
+      ctx.font = "13px Segoe UI, sans-serif";
+      ctx.fillText("tap to continue", W / 2, H - 22);
+    }
+    ctx.textAlign = "left";
+  }
+
+  function drawPoliceCar(x, floorY, t) {
+    const y = floorY - 34;
+    // body
+    ctx.fillStyle = "#e9edf5"; ctx.fillRect(x, y, 120, 24);
+    ctx.fillStyle = "#1c2740"; ctx.fillRect(x, y + 6, 120, 8);   // blue stripe
+    // cabin
+    ctx.fillStyle = "#cfd6e4"; ctx.fillRect(x + 30, y - 16, 56, 18);
+    ctx.fillStyle = "#2a3550"; ctx.fillRect(x + 34, y - 12, 48, 12); // windows
+    // light bar (flashing)
+    const flash = Math.floor(t / 12) % 2 === 0;
+    ctx.fillStyle = flash ? "#ff3b53" : "#7a1520"; ctx.fillRect(x + 44, y - 22, 14, 6);
+    ctx.fillStyle = flash ? "#2a55ff" : "#152a7a"; ctx.fillRect(x + 60, y - 22, 14, 6);
+    if (flash) { ctx.fillStyle = "rgba(255,60,80,0.4)"; } else { ctx.fillStyle = "rgba(60,120,255,0.4)"; }
+    ctx.beginPath(); ctx.arc(x + 58, y - 20, 22, 0, Math.PI * 2); ctx.fill();
+    // "POLICE"
+    ctx.fillStyle = "#1c2740"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("POLICE", x + 60, y + 20); ctx.textAlign = "left";
+    // wheels
+    ctx.fillStyle = "#111"; for (const wx of [x + 24, x + 96]) { ctx.beginPath(); ctx.arc(wx, floorY, 12, 0, Math.PI * 2); ctx.fill(); }
+  }
+
+  // A handcuffed criminal (boss = bigger/purple, guard = red), head bowed.
+  function drawCrook(x, feetY, kind, t) {
+    const isBoss = kind === "boss";
+    const w = isBoss ? 26 : 22;
+    const bodyH = isBoss ? 52 : 44, legH = 16;
+    const y = feetY - legH - bodyH;
+    // legs
+    ctx.strokeStyle = "#2a2a33"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(x + 5, feetY - legH); ctx.lineTo(x + 5, feetY);
+    ctx.moveTo(x + w - 5, feetY - legH); ctx.lineTo(x + w - 5, feetY); ctx.stroke();
+    // body
+    ctx.fillStyle = isBoss ? "#8b2bb0" : "#7a2230";
+    ctx.fillRect(x, y + 14, w, (feetY - legH) - (y + 14));
+    // head (bowed = a bit lower)
+    ctx.fillStyle = "#e8c7a0"; ctx.fillRect(x + 4, y + 3, w - 8, 13);
+    ctx.fillStyle = "#2a1a12"; ctx.fillRect(x + 3, y + 1, w - 6, 5); // hair
+    // handcuffed hands in front (wrists together) + cuff glint
+    ctx.fillStyle = "#e8c7a0"; ctx.fillRect(x + w / 2 - 5, y + 26, 10, 6);
+    ctx.strokeStyle = "#cfd6e4"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x + w / 2, y + 29, 5, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // A Tokyo police officer: dark-blue uniform + peaked cap.
+  function drawPolice(x, feetY, t) {
+    const w = 22, bodyH = 48, legH = 16;
+    const y = feetY - legH - bodyH;
+    ctx.strokeStyle = "#1a1f2e"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(x + 6, feetY - legH); ctx.lineTo(x + 6, feetY);
+    ctx.moveTo(x + w - 6, feetY - legH); ctx.lineTo(x + w - 6, feetY); ctx.stroke();
+    ctx.fillStyle = "#1c2a55"; ctx.fillRect(x, y + 14, w, (feetY - legH) - (y + 14)); // uniform
+    ctx.fillStyle = "#ffd166"; ctx.fillRect(x + w - 6, y + 18, 3, 3);  // badge
+    ctx.fillStyle = "#e8c7a0"; ctx.fillRect(x + 4, y + 2, w - 8, 12);   // face
+    // peaked cap
+    ctx.fillStyle = "#141a30"; ctx.fillRect(x + 2, y - 2, w - 4, 6);
+    ctx.fillStyle = "#0e1428"; ctx.fillRect(x, y + 3, w, 3);           // brim
+    // an arm on the crook's shoulder (escorting)
+    ctx.strokeStyle = "#1c2a55"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(x, y + 22); ctx.lineTo(x - 10, y + 18); ctx.stroke();
   }
 
   function drawCelebration() {
@@ -2784,6 +2940,12 @@
       updateWeb();
       updateClues();
       updateCamera();
+    }
+    if (state.mode === "arrest") {
+      updateArrest();
+      drawArrest();
+      requestAnimationFrame(loop);
+      return;
     }
     if (state.mode === "transition") {
       updateTransition();

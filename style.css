@@ -46,7 +46,10 @@ canvas {
   background: rgba(8, 10, 18, 0.9);
   backdrop-filter: blur(2px);
   z-index: 20;
-  padding: 16px;
+  /* allow the panel to scroll and stay clear of the browser URL bar */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px));
 }
 
 .overlay.hidden { display: none; }
@@ -55,8 +58,11 @@ canvas {
   background: #161a2b;
   border: 1px solid #333a58;
   border-radius: 12px;
-  padding: 32px 40px;
+  padding: 28px 34px;
   max-width: 560px;
+  max-height: 100%;
+  overflow-y: auto;
+  margin: auto;
   text-align: center;
   box-shadow: 0 12px 40px rgba(0,0,0,0.5);
 }
@@ -197,7 +203,7 @@ b { color: #e8ecf5; }
 
 /* Landscape phones: keep the panels readable */
 @media (max-width: 900px) {
-  .panel { padding: 18px 18px; max-width: 92vw; max-height: 88vh; overflow-y: auto; }
+  .panel { padding: 18px 18px; max-width: 92vw; }
   .panel h1 { font-size: 22px; }
   .panel h2 { font-size: 18px; }
   .panel p { font-size: 13px; margin-bottom: 12px; }

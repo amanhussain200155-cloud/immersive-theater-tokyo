@@ -859,13 +859,16 @@
     // Acrobatic somersault: spin through the air while off the ground, then
     // settle upright once she lands.
     if (!player.onGround) {
-      player.spin += player.facing * 0.28;   // flip in the facing direction
+      player.spin += player.facing * 0.34;   // flip in the facing direction
     } else if (player.spin !== 0) {
-      // ease the remaining rotation back to upright quickly on landing
+      // Finish the flip in the SAME direction to the nearest full turn, then
+      // snap upright — so it never reverses (which looked like a rewind).
       const twoPi = Math.PI * 2;
-      player.spin %= twoPi;
-      if (Math.abs(player.spin) < 0.25) player.spin = 0;
-      else player.spin -= Math.sign(player.spin) * 0.35;
+      const dir = player.spin >= 0 ? 1 : -1;
+      const target = dir * Math.ceil(Math.abs(player.spin) / twoPi) * twoPi; // next full rotation ahead
+      const remaining = target - player.spin;
+      if (Math.abs(remaining) < 0.4) { player.spin = 0; }
+      else player.spin += dir * 0.4;         // keep rotating forward to complete
     }
 
     // World bounds

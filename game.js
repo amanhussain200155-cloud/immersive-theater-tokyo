@@ -173,9 +173,13 @@
     const cy = r.top + r.height / 2;
     const dx = clientX - cx, dy = clientY - cy;
     const dist = Math.hypot(dx, dy);
-    if (dist < 14) {           // near-center — aim straight ahead (tracks facing)
+    // Only count it as "aiming" if the finger is dragged clearly BEYOND the
+    // button (a normal tap — even with thumb jitter — fires straight ahead in
+    // the current run/facing direction).
+    const deadZone = Math.max(r.width, r.height) * 0.9;   // ~47px for a 52px button
+    if (dist < deadZone) {
       touchAim.straight = true;
-    } else {                   // real drag — lock the aimed direction
+    } else {
       touchAim.straight = false;
       touchAim.x = dx / dist; touchAim.y = dy / dist;
     }

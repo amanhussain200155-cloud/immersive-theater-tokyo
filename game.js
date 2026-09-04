@@ -82,7 +82,7 @@
 
   // Aim vector set by dragging an action button (shoot/bomb/web). While a
   // drag is active, this overrides keyboard aim. Range ~[-1,1] per axis.
-  const touchAim = { x: 0, y: 0, active: false };
+  const touchAim = { x: 0, y: 0, active: false, straight: false };
 
   window.addEventListener("keydown", (e) => {
     // prevent page scroll on arrows/space while playing
@@ -173,9 +173,10 @@
     const cy = r.top + r.height / 2;
     const dx = clientX - cx, dy = clientY - cy;
     const dist = Math.hypot(dx, dy);
-    if (dist < 12) {           // near-center — aim straight ahead
-      touchAim.x = player.facing; touchAim.y = 0;
-    } else {
+    if (dist < 14) {           // near-center — aim straight ahead (tracks facing)
+      touchAim.straight = true;
+    } else {                   // real drag — lock the aimed direction
+      touchAim.straight = false;
       touchAim.x = dx / dist; touchAim.y = dy / dist;
     }
     touchAim.active = true;
@@ -215,7 +216,7 @@
       heldAim = null;                  // stop firing
       keys["j"] = false;               // release continuous shoot
       // let the aim linger a hair, then revert to keyboard/facing
-      setTimeout(() => { if (!heldAim) { touchAim.active = false; touchAim.x = 0; touchAim.y = 0; } }, 90);
+      setTimeout(() => { if (!heldAim) { touchAim.active = false; touchAim.straight = false; touchAim.x = 0; touchAim.y = 0; } }, 90);
     };
     btn.addEventListener("pointerdown", down);
     btn.addEventListener("pointermove", move);
@@ -817,8 +818,12 @@
   // ---------------------------------------------------------------------
   function updateAim() {
     let ax = 0, ay = 0;
-    if (touchAim.active && (Math.abs(touchAim.x) > 0.2 || Math.abs(touchAim.y) > 0.2)) {
-      // aiming via a drag on an action button (shoot/bomb/web)
+    if (touchAim.active && touchAim.straight) {
+      // tap-fire on an action button: always shoot in the CURRENT run/facing
+      // direction (live), so running right + shoot fires right.
+      ax = player.facing; ay = 0;
+    } else if (touchAim.active && (Math.abs(touchAim.x) > 0.2 || Math.abs(touchAim.y) > 0.2)) {
+      // aiming via a real drag on an action button (shoot/bomb/web)
       ax = touchAim.x; ay = touchAim.y;
     } else {
       // keyboard: horizontal from facing, vertical from up/down keys
